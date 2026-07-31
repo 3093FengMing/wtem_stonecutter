@@ -1,6 +1,6 @@
 package me.fengming.wtem.common.core.visitor;
 
-import me.fengming.wtem.common.core.TranslationContext;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIds;
@@ -46,6 +46,29 @@ public class ItemTagVisitor implements SimpleTagVisitor {
             if (!traversal.entered()) return;
             this.changed |= translateItemText(components);
             this.changed |= handleAttributeModifiers(components);
+            this.changed |= handleBook(components);
+            handleNestedItems(components);
+            this.changed |= handleNestedData(components);
+        }
+    }
+
+    /** Visits a component patch while retaining the item-based upstream key strategy. */
+    public void visitComponents(String itemId, CompoundTag components) {
+        if (components.isEmpty()) return;
+
+        String type = itemId == null || itemId.isBlank() ? "unknown" : ResourceIds.path(itemId);
+        String countType = "item." + type;
+        int itemIndex = TranslationContext.getTypeCounts(countType);
+
+        try (var traversal = NbtTraversalGuard.enter();
+                var ignored = TranslationContext.pushKey(countType + "." + itemIndex)) {
+            if (!traversal.entered()) return;
+
+            boolean translated = translateItemText(components);
+            translated |= handleAttributeModifiers(components);
+            this.changed |= translated;
+            if (translated) TranslationContext.increaseTypeCounts(countType);
+
             this.changed |= handleBook(components);
             handleNestedItems(components);
             this.changed |= handleNestedData(components);

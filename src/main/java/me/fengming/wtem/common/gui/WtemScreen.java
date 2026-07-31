@@ -5,7 +5,9 @@ import com.mojang.datafixers.DataFixer;
 import com.mojang.serialization.Dynamic;
 import it.unimi.dsi.fastutil.booleans.BooleanConsumer;
 import me.fengming.wtem.common.Wtem;
-import me.fengming.wtem.common.core.WorldExtractor;
+import me.fengming.wtem.common.core.extraction.WorldExtractor;
+import me.fengming.wtem.common.core.extraction.service.ExtractionProgress;
+import me.fengming.wtem.common.core.extraction.service.ExtractionStatus;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.Minecraft;
@@ -17,14 +19,12 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.NbtUtils;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.WorldStem;
 import net.minecraft.server.packs.repository.PackRepository;
 import net.minecraft.server.packs.repository.ServerPacksSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.util.datafix.DataFixers;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.LevelStorageSource;
 import net.minecraft.world.level.storage.WorldData;
 
@@ -120,11 +120,11 @@ public class WtemScreen extends Screen {
     @Override
     public void tick() {
         if (this.completionHandled) return;
-        WorldExtractor.ExtractionStatus status = this.worldExtractor.getExtractionStatus();
+        ExtractionStatus status = this.worldExtractor.getExtractionStatus();
         if (!status.isTerminal()) return;
 
         this.completionHandled = true;
-        this.callback.accept(status == WorldExtractor.ExtractionStatus.SUCCEEDED);
+        this.callback.accept(status.isSuccessful());
     }
 
     @Override
@@ -150,39 +150,53 @@ public class WtemScreen extends Screen {
         int right = this.width / 2 + 150;
         int bottom = this.height / 4 + 100;
         int top = bottom + 10;
-        if (this.worldExtractor.getTotalChunks() <= 0) return;
+        ExtractionProgress progress = this.worldExtractor.getExtractionProgress();
+        if (progress.totalChunks() <= 0) return;
         extractButton.visible = false;
 
         guiGraphics.fill(left - 1, bottom - 1, right + 1, top + 1, -16777216);
         guiGraphics.text(
                 this.font,
-                Component.translatable("gui.wtem.main.info.extracted", this.worldExtractor.getConverted()),
+                Component.translatable("gui.wtem.main.info.extracted", progress.converted()),
                 left,
                 40,
                 10526880);
         guiGraphics.text(
                 this.font,
-                Component.translatable("gui.wtem.main.info.total", this.worldExtractor.getTotalChunks()),
+                Component.translatable("gui.wtem.main.info.total", progress.totalChunks()),
                 left,
                 40 + (9 + 3) * 2,
                 10526880);
+        int warnings = this.worldExtractor.getReport().failures().size();
+        if (warnings > 0) {
+            guiGraphics.text(
+                    this.font,
+                    Component.translatable("gui.wtem.main.info.warnings", warnings),
+                    left,
+                    40 + 9 + 3,
+                    0xFFAA00);
+        }
         int process = 0;
 
-        for (ResourceKey<Level> resourceKey : this.worldExtractor.levels()) {
-            int n = Mth.floor(this.worldExtractor.dimensionProgress(resourceKey) * (right - left));
+        for (ExtractionProgress.DimensionProgress dimension : progress.dimensions()) {
+            int n = Mth.floor(dimension.progress() * (right - left));
             guiGraphics.fill(
-                    left + process, bottom, left + process + n, top, -2236963 * resourceKey.hashCode());
+                    left + process,
+                    bottom,
+                    left + process + n,
+                    top,
+                    -2236963 * dimension.level().hashCode());
             process += n;
         }
 
-        int o = this.worldExtractor.getConverted() + this.worldExtractor.getSkipped();
+        int o = progress.converted() + progress.skipped();
         Component component =
                 Component.translatable(
-                        "gui.wtem.main.progress.counter", o, this.worldExtractor.getTotalChunks());
+                        "gui.wtem.main.progress.counter", o, progress.totalChunks());
         Component component2 =
                 Component.translatable(
                         "gui.wtem.main.progress.percentage",
-                        Mth.floor(this.worldExtractor.getProgress() * 100.0F));
+                        Mth.floor(progress.totalProgress() * 100.0F));
         guiGraphics.centeredText(this.font, component, this.width / 2, bottom + 2 * 9 + 2, 10526880);
         guiGraphics.centeredText(
                 this.font, component2, this.width / 2, bottom + (top - bottom) / 2 - 9 / 2, 10526880);

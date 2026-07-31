@@ -6,7 +6,7 @@ import com.google.gson.JsonObject;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.function.Function;
-import me.fengming.wtem.common.core.TranslationContext;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.visitor.ItemTagVisitor;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIds;
@@ -26,54 +26,85 @@ public class ItemModifierHandler extends NonExtraResourceHandler {
     }
 
     @Override
-    protected void innerHandle(Identifier rl, IoSupplier<InputStream> supplier) {
+    protected boolean innerHandle(Identifier rl, IoSupplier<InputStream> supplier) {
         var json = ResourceIo.readJson(supplier, "");
+        JsonElement original = json.deepCopy();
         if (json.isJsonObject()) {
             json = processItemModifier(json.getAsJsonObject());
         } else if (json.isJsonArray()) {
             json = processItemModifiers(json.getAsJsonArray());
         }
-        ResourceIo.writeString(getFilePath(rl), GSON.toJson(json));
+        boolean changed = !json.equals(original);
+        if (changed) ResourceIo.writeJson(getFilePath(rl), json);
+        return changed;
     }
 
     public static JsonArray processItemModifiers(JsonArray modifiers) {
         JsonArray array = new JsonArray();
         for (JsonElement element : modifiers) {
-            array.add(processItemModifier(element.getAsJsonObject()));
+            array.add(
+                    element.isJsonObject()
+                            ? processItemModifier(element.getAsJsonObject())
+                            : element);
         }
         return array;
     }
 
     public static JsonObject processItemModifier(JsonObject modifier) {
-        if (!modifier.has("function")) return modifier;
-        String function = modifier.get("function").getAsString();
-        try (var ignored = TranslationContext.push(ResourceIds.path(function))) {
+        if (!modifier.has("function") || !modifier.get("function").isJsonPrimitive()) return modifier;
+        String function = ResourceIds.vanillaPath(modifier.get("function").getAsString());
+        try (var ignored = TranslationContext.push(function)) {
             switch (function) {
-                case "minecraft:set_lore" -> {
-                    var lore = modifier.get("lore").getAsJsonArray();
-                    var array = new JsonArray();
-                    for (JsonElement element : lore) {
-                        array.add(TranslationUtils.translateLiteral(element));
-                    }
-                    modifier.add("lore", array);
-                }
-                case "minecraft:set_name" ->
-                        modifier.add("name", TranslationUtils.translateLiteral(modifier.get("name")));
-                case "minecraft:set_components" -> {
-                    var compound = NbtUtils.fromJson(modifier.getAsJsonObject("components"));
-                    new ItemTagVisitor().visitComponents(compound);
-                    modifier.add("components", NbtUtils.toJson(compound));
-                }
-                case "minecraft:set_contents" -> {
-                    var array = new JsonArray();
-                    var entries = modifier.getAsJsonArray("entries");
-                    for (JsonElement entry : entries) {
-                        array.add(LootTableHandler.processLootEntry(entry.getAsJsonObject()));
-                    }
-                    modifier.add("entries", array);
+                case "set_lore" -> translateLore(modifier);
+                case "set_name" -> translateName(modifier);
+                case "set_components" -> translateComponents(modifier);
+                case "set_contents" -> processContents(modifier);
+                default -> {
+                    // Other functions carry no literal text that can be identified by schema.
                 }
             }
         }
         return modifier;
+    }
+
+    private static void translateLore(JsonObject modifier) {
+        if (!modifier.has("lore") || !modifier.get("lore").isJsonArray()) return;
+
+        JsonArray array = new JsonArray();
+        int index = 0;
+        for (JsonElement element : modifier.getAsJsonArray("lore")) {
+            try (var ignored = TranslationContext.push("line" + index++)) {
+                array.add(TranslationUtils.translateLiteral(element));
+            }
+        }
+        modifier.add("lore", array);
+    }
+
+    private static void translateName(JsonObject modifier) {
+        if (!modifier.has("name")) return;
+        modifier.add("name", TranslationUtils.translateLiteral(modifier.get("name")));
+    }
+
+    private static void translateComponents(JsonObject modifier) {
+        if (!modifier.has("components") || !modifier.get("components").isJsonObject()) return;
+
+        var compound = NbtUtils.fromJson(modifier.getAsJsonObject("components"));
+        var visitor = new ItemTagVisitor();
+        visitor.visitComponents(compound);
+        if (!visitor.isChanged()) return;
+        modifier.add("components", NbtUtils.toJson(compound));
+    }
+
+    private static void processContents(JsonObject modifier) {
+        if (!modifier.has("entries") || !modifier.get("entries").isJsonArray()) return;
+
+        var array = new JsonArray();
+        for (JsonElement entry : modifier.getAsJsonArray("entries")) {
+            array.add(
+                    entry.isJsonObject()
+                            ? LootTableHandler.processLootEntry(entry.getAsJsonObject())
+                            : entry);
+        }
+        modifier.add("entries", array);
     }
 }

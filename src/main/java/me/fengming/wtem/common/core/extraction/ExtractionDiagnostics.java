@@ -1,10 +1,13 @@
-package me.fengming.wtem.common.core;
+package me.fengming.wtem.common.core.extraction;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-/** Thread-safe collection of non-fatal extraction failures.
- * @author FengMing*/
+/**
+ * Thread-safe collection of non-fatal extraction failures.
+ *
+ * @author FengMing
+ */
 public final class ExtractionDiagnostics {
     private final ConcurrentLinkedQueue<Failure> failures = new ConcurrentLinkedQueue<>();
 

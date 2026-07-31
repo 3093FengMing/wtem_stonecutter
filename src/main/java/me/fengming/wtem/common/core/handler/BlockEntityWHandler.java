@@ -2,8 +2,8 @@ package me.fengming.wtem.common.core.handler;
 
 import java.util.List;
 import java.util.Set;
-import me.fengming.wtem.common.core.TranslationContext;
-import me.fengming.wtem.common.core.handler.datapack.FunctionHandler;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.core.visitor.EntityTagVisitor;
 import me.fengming.wtem.common.core.visitor.ItemTagVisitor;
 import me.fengming.wtem.common.core.visitor.SimpleTagVisitor;

@@ -1,7 +1,7 @@
 package me.fengming.wtem.common.core.visitor;
 
 import java.util.List;
-import me.fengming.wtem.common.core.TranslationContext;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIds;
 import me.fengming.wtem.common.util.TranslationUtils;

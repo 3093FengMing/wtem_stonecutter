@@ -1,9 +1,14 @@
 package me.fengming.wtem.common.core.handler.datapack;
 
+import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
+
 import java.util.List;
 
-/** Defines the built-in extraction schema in deterministic processing order.
- * @author FengMing*/
+/**
+ * Defines the built-in extraction schema in deterministic processing order.
+ *
+ * @author FengMing
+ */
 public final class DefaultResourceHandlers {
     private DefaultResourceHandlers() {}
 

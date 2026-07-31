@@ -5,6 +5,7 @@
   "gui.wtem.main.extraction.finished": "Finished extracting",
   "gui.wtem.main.title": "World Translation Extractor",
   "gui.wtem.main.info.extracted": "Extracted chunks: %s",
+  "gui.wtem.main.info.warnings": "Warnings: %s (see log for details)",
   "gui.wtem.main.info.total": "Total chunks: %s",
   "gui.wtem.main.progress.counter": "%s / %s",
   "gui.wtem.main.progress.percentage": "%s%%"

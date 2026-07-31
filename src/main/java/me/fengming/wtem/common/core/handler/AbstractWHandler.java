@@ -1,6 +1,6 @@
 package me.fengming.wtem.common.core.handler;
 
-import me.fengming.wtem.common.core.TranslationContext;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 import net.minecraft.nbt.Tag;
 
 /**
@@ -19,7 +19,11 @@ public abstract class AbstractWHandler<T extends Tag> {
     protected abstract boolean innerHandle(T tag);
 
     public boolean handle(T tag) {
-        TranslationContext.setKey(getKey(tag));
-        return innerHandle(tag);
+        try (var transaction = TranslationContext.beginTransaction()) {
+            TranslationContext.setKey(getKey(tag));
+            boolean changed = innerHandle(tag);
+            if (changed) transaction.commit();
+            return changed;
+        }
     }
 }

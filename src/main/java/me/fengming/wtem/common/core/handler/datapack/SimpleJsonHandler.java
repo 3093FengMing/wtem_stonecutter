@@ -1,5 +1,7 @@
 package me.fengming.wtem.common.core.handler.datapack;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.List;
@@ -24,17 +26,21 @@ public class SimpleJsonHandler extends ResourceHandler {
     }
 
     @Override
-    protected void innerHandle(Identifier rl, IoSupplier<InputStream> supplier) {
-        ResourceIo.writeString(getFilePath(rl), processJsonFile(supplier, this.context.list()));
-    }
-
-    protected String processJsonFile(IoSupplier<InputStream> supplier, List<String> list) {
+    protected boolean innerHandle(Identifier rl, IoSupplier<InputStream> supplier) {
+        List<String> list = this.context.targetPaths();
         if (list == null) throw new IllegalStateException("Missing component target paths");
-        var jsonObj = ResourceIo.readJson(supplier, "").getAsJsonObject();
-        for (String s : list) {
-            TranslationUtils.translateJsonElement(jsonObj, s);
+        JsonElement root = ResourceIo.readJson(supplier, "");
+        if (!root.isJsonObject()) {
+            throw new IllegalStateException("Resource root is not a JSON object: " + rl);
         }
-        return GSON.toJson(jsonObj);
+
+        JsonObject jsonObj = root.getAsJsonObject();
+        boolean changed = false;
+        for (String s : list) {
+            changed |= TranslationUtils.translateJsonElement(jsonObj, s);
+        }
+        if (changed) ResourceIo.writeJson(getFilePath(rl), jsonObj);
+        return changed;
     }
 
 }

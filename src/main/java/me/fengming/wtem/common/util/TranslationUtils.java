@@ -9,7 +9,7 @@ import com.mojang.serialization.JsonOps;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import me.fengming.wtem.common.core.TranslationContext;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtOps;
@@ -33,7 +33,7 @@ public final class TranslationUtils {
     public static String translateLiteral(String literal, boolean nonItalic) {
         if (literal == null || literal.isBlank()) return literal;
 
-        try {
+        try (var transaction = TranslationContext.beginTransaction()) {
             Component original = deserializeComponent(JsonParser.parseString(literal));
             Component translated = translateLiteral(original);
             if (translated == original) return literal;
@@ -41,7 +41,9 @@ public final class TranslationUtils {
             if (nonItalic) {
                 translated = translated.copy().withStyle(Style.EMPTY.withItalic(false));
             }
-            return serializeComponent(translated).toString();
+            String result = serializeComponent(translated).toString();
+            transaction.commit();
+            return result;
         } catch (JsonParseException | IllegalStateException e) {
             return literal;
         }
@@ -56,9 +58,13 @@ public final class TranslationUtils {
     public static Component translateLiteral(Component original) {
         if (original == null) return null;
 
-        try {
+        try (var transaction = TranslationContext.beginTransaction()) {
             TransformResult result = translateComponentJson(serializeComponent(original));
-            return result.changed() ? deserializeComponent(result.value()) : original;
+            if (!result.changed()) return original;
+
+            Component translated = deserializeComponent(result.value());
+            transaction.commit();
+            return translated;
         } catch (JsonParseException | IllegalStateException e) {
             return original;
         }
@@ -67,12 +73,13 @@ public final class TranslationUtils {
     public static JsonElement translateLiteral(JsonElement json) {
         if (json == null || json.isJsonNull()) return json;
 
-        try {
+        try (var transaction = TranslationContext.beginTransaction()) {
             deserializeComponent(json);
             TransformResult result = translateComponentJson(json.deepCopy());
             if (!result.changed()) return json;
 
             deserializeComponent(result.value());
+            transaction.commit();
             return result.value();
         } catch (JsonParseException | IllegalStateException e) {
             return json;
@@ -81,7 +88,11 @@ public final class TranslationUtils {
 
     public static String translateToJson(Component component) {
         if (component == null) return "";
-        return serializeComponent(translateLiteral(component)).toString();
+        try (var transaction = TranslationContext.beginTransaction()) {
+            String result = serializeComponent(translateLiteral(component)).toString();
+            transaction.commit();
+            return result;
+        }
     }
 
     /**
@@ -106,7 +117,8 @@ public final class TranslationUtils {
             CompoundTag compound, String path, String keyPath) {
         if (compound == null || path == null || path.isBlank()) return false;
 
-        try (var ignored = TranslationContext.push(keyPath)) {
+        try (var transaction = TranslationContext.beginTransaction();
+                var ignored = TranslationContext.push(keyPath)) {
             TagPath tagPath = TagPath.of(path);
             CompoundTag parent = findNbtParent(compound, tagPath);
             if (parent == null) return false;
@@ -123,6 +135,7 @@ public final class TranslationUtils {
             if (translatedTag == originalTag) return false;
 
             parent.put(tagPath.name(), translatedTag);
+            transaction.commit();
             return true;
         } catch (JsonParseException | IllegalStateException e) {
             return false;
@@ -133,14 +146,17 @@ public final class TranslationUtils {
     public static boolean translateNbtComponent(ListTag list, int index, String keyPath) {
         if (list == null || index < 0 || index >= list.size()) return false;
 
-        try (var ignored = TranslationContext.push(keyPath)) {
+        try (var transaction = TranslationContext.beginTransaction();
+                var ignored = TranslationContext.push(keyPath)) {
             Tag originalTag = list.get(index);
             Tag translatedTag =
                     translateNbtComponentTag(
                             originalTag,
                             originalTag instanceof StringTag ? NbtUtils.getString(list, index) : null);
             if (translatedTag == originalTag) return false;
-            return list.setTag(index, translatedTag);
+            if (!list.setTag(index, translatedTag)) return false;
+            transaction.commit();
+            return true;
         } catch (JsonParseException | IllegalStateException e) {
             return false;
         }
@@ -161,7 +177,8 @@ public final class TranslationUtils {
             return false;
         }
 
-        try (var ignored = TranslationContext.push(keyPath)) {
+        try (var transaction = TranslationContext.beginTransaction();
+                var ignored = TranslationContext.push(keyPath)) {
             Component translated = Component.translatable(TranslationContext.addEntry(literal));
             if (nonItalic) {
                 translated = translated.copy().withStyle(Style.EMPTY.withItalic(false));
@@ -171,6 +188,7 @@ public final class TranslationUtils {
             CompoundTag parent = findNbtParent(compound, tagPath);
             if (parent == null) return false;
             parent.put(tagPath.name(), serializeNbtComponent(translated));
+            transaction.commit();
             return true;
         } catch (JsonParseException | IllegalStateException e) {
             return false;
@@ -221,13 +239,24 @@ public final class TranslationUtils {
      *
      * <p>Path segments support object names, numeric array indexes, and {@code [*]} wildcards, for
      * example {@code body[*].contents} and {@code pages[0].raw}.
+     *
+     * <p>The generated language key mirrors the resolved location instead of the path expression, so
+     * a wildcard produces one key per visited element, for example {@code body.0.contents}.
      */
     public static boolean translateJsonElement(JsonObject json, String path) {
         if (json == null || path == null || path.isBlank()) return false;
 
-        try (var ignored = TranslationContext.push(path)) {
+        try (var transaction = TranslationContext.beginTransaction()) {
             List<PathSegment> segments = parseJsonPath(path);
-            return translateJsonPath(json, segments, 0).changed();
+            JsonObject working = json.deepCopy();
+            if (!translateJsonPath(working, segments, 0).changed()) return false;
+
+            json.entrySet().clear();
+            for (Map.Entry<String, JsonElement> entry : working.entrySet()) {
+                json.add(entry.getKey(), entry.getValue());
+            }
+            transaction.commit();
+            return true;
         } catch (JsonParseException | IllegalArgumentException | IllegalStateException e) {
             return false;
         }
@@ -369,33 +398,55 @@ public final class TranslationUtils {
             child = parentObject.get(segment.name());
         }
 
-        if (!segment.hasArraySelector()) {
-            PathTransform translated = translateJsonPath(child, segments, segmentIndex + 1);
-            if (translated.changed() && parentObject != null) {
-                parentObject.add(segment.name(), translated.value());
+        // The key path follows the resolved location, so an unnamed segment contributes nothing and a
+        // wildcard contributes the visited index instead of the literal '*'.
+        try (var ignored = TranslationContext.push(keySegment(segment.name()))) {
+            if (!segment.hasArraySelector()) {
+                PathTransform translated = translateJsonPath(child, segments, segmentIndex + 1);
+                if (translated.changed() && parentObject != null) {
+                    parentObject.add(segment.name(), translated.value());
+                }
+                return new PathTransform(current, translated.changed());
             }
-            return new PathTransform(current, translated.changed());
-        }
 
-        if (!child.isJsonArray()) return PathTransform.unchanged(current);
-        JsonArray array = child.getAsJsonArray();
-        boolean changed = false;
-        if (segment.wildcard()) {
-            for (int i = 0; i < array.size(); i++) {
-                PathTransform translated = translateJsonPath(array.get(i), segments, segmentIndex + 1);
-                if (!translated.changed()) continue;
-                array.set(i, translated.value());
-                changed = true;
+            if (!child.isJsonArray()) return PathTransform.unchanged(current);
+            JsonArray array = child.getAsJsonArray();
+            boolean changed = false;
+            if (segment.wildcard()) {
+                for (int i = 0; i < array.size(); i++) {
+                    PathTransform translated;
+                    try (var element = TranslationContext.push(Integer.toString(i))) {
+                        translated = translateJsonPath(array.get(i), segments, segmentIndex + 1);
+                    }
+                    if (!translated.changed()) continue;
+                    array.set(i, translated.value());
+                    changed = true;
+                }
+                return new PathTransform(current, changed);
             }
-        } else if (segment.index() >= 0 && segment.index() < array.size()) {
-            PathTransform translated =
-                    translateJsonPath(array.get(segment.index()), segments, segmentIndex + 1);
+
+            if (segment.index() < 0 || segment.index() >= array.size()) {
+                return PathTransform.unchanged(current);
+            }
+
+            PathTransform translated;
+            try (var element = TranslationContext.push(Integer.toString(segment.index()))) {
+                translated = translateJsonPath(array.get(segment.index()), segments, segmentIndex + 1);
+            }
             if (translated.changed()) {
                 array.set(segment.index(), translated.value());
                 changed = true;
             }
+            return new PathTransform(current, changed);
         }
-        return new PathTransform(current, changed);
+    }
+
+    /** Converts a JSON member name into a language-key segment. */
+    private static String keySegment(String name) {
+        if (name.isEmpty()) return "";
+        // Namespaced schema names such as 'minecraft:gameplay/bed_rule' would otherwise produce keys
+        // containing ':' and '/', which cannot be addressed by resource-pack language files.
+        return ResourceIds.path(name).replace('/', '.');
     }
 
     private static List<PathSegment> parseJsonPath(String path) {

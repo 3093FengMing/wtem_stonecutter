@@ -1,4 +1,7 @@
 classTweaker v2 official
+accessible field net/minecraft/commands/arguments/item/ItemInput item Lnet/minecraft/core/Holder;
+accessible field net/minecraft/commands/arguments/item/ItemInput components Lnet/minecraft/core/component/DataComponentPatch;
+accessible field net/minecraft/commands/arguments/blocks/BlockInput tag Lnet/minecraft/nbt/CompoundTag;
 #?if >= 26.1 {
 accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder dataFixer Lcom/mojang/datafixers/DataFixer;
 accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder dataFixType Lnet/minecraft/util/datafix/DataFixTypes;
@@ -9,6 +12,8 @@ accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder re
 accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder upgradeProgress Lnet/minecraft/util/worldupdate/UpgradeProgress;
 accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder dataFixContextTag Lnet/minecraft/nbt/CompoundTag;
 accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder tagModifiers Lit/unimi/dsi/fastutil/ints/Int2ObjectAVLTreeMap;
+accessible field net/minecraft/util/worldupdate/WorldUpgrader upgradeProgress Lnet/minecraft/util/worldupdate/UpgradeProgress;
+accessible field net/minecraft/util/worldupdate/WorldUpgrader overworldSavedDataStorage Lnet/minecraft/world/level/storage/SavedDataStorage;
 #?} else {
 
 #extendable method net/minecraft/util/worldupdate/WorldUpgrader work ()V
@@ -17,6 +22,7 @@ accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder ta
 #
 #accessible field net/minecraft/util/worldupdate/WorldUpgrader finished Z
 #accessible field net/minecraft/util/worldupdate/WorldUpgrader thread Ljava/lang/Thread;
+#accessible field net/minecraft/util/worldupdate/WorldUpgrader running Z
 #accessible field net/minecraft/util/worldupdate/WorldUpgrader overworldDataStorage Lnet/minecraft/world/level/storage/DimensionDataStorage;
 #
 ##?if > 1.21.1 && < 26.1 {
@@ -30,5 +36,3 @@ accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder ta
 ##?}
 
 #?}
-
-accessible method net/minecraft/world/level/levelgen/structure/templatesystem/StructureTemplateManager listGenerated ()Ljava/util/stream/Stream;

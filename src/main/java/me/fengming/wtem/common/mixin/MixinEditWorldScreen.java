@@ -38,16 +38,8 @@ public abstract class MixinEditWorldScreen extends Screen {
         super(component);
     }
 
-    //~if >=26.1 '9' -> '12'
-    @Inject(
-            method = "<init>",
-            at =
-                    @At(
-                            value = "INVOKE",
-                            target =
-                                    "Lnet/minecraft/client/gui/layouts/LinearLayout;addChild(Lnet/minecraft/client/gui/layouts/LayoutElement;)Lnet/minecraft/client/gui/layouts/LayoutElement;",
-                            shift = At.Shift.AFTER,
-                            ordinal = 12))
+    //~if >=26.1 '9' -> '11'
+    @Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/layouts/LinearLayout;addChild(Lnet/minecraft/client/gui/layouts/LayoutElement;)Lnet/minecraft/client/gui/layouts/LayoutElement;", shift = At.Shift.AFTER, ordinal = 11))
     private void onInit(CallbackInfo ci) {
         this.layout.addChild(
                 Button.builder(
@@ -79,6 +71,6 @@ public abstract class MixinEditWorldScreen extends Screen {
         //? if >=26.2 {
         minecraft.setScreenAndShow(screen);
         //?} else
-         //minecraft.setScreen(screen);
+        //minecraft.setScreen(screen);
     }
 }

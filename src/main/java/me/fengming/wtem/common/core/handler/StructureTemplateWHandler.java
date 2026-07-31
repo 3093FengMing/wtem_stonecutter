@@ -23,7 +23,11 @@ public class StructureTemplateWHandler extends AbstractWHandler<CompoundTag> {
 
     public Result process(StructureTemplate structure) {
         if (structure == null) return new Result(new CompoundTag(), false);
-        CompoundTag compound = structure.save(new CompoundTag());
+        return process(structure.save(new CompoundTag()));
+    }
+
+    public Result process(CompoundTag compound) {
+        if (compound == null || compound.isEmpty()) return new Result(new CompoundTag(), false);
         return new Result(compound, handle(compound));
     }
 

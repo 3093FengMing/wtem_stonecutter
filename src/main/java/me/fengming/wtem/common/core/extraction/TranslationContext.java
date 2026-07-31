@@ -1,4 +1,4 @@
-package me.fengming.wtem.common.core;
+package me.fengming.wtem.common.core.extraction;
 
 import com.google.gson.GsonBuilder;
 import java.util.ArrayDeque;
@@ -122,6 +122,16 @@ public final class TranslationContext {
         return new Scope(previous);
     }
 
+    /**
+     * Starts a nested transaction for key allocation and language entries.
+     *
+     * <p>Closing an uncommitted transaction restores the complete context state. This keeps failed
+     * codec conversions and failed resource writes from consuming keys or leaking orphan entries.
+     */
+    public static Transaction beginTransaction() {
+        return new Transaction(state().copy());
+    }
+
     private static String currentPath() {
         Deque<String> pathStack = state().pathStack;
         if (pathStack.isEmpty()) return "no_key";
@@ -155,6 +165,39 @@ public final class TranslationContext {
         private final Map<String, Integer> typeCounts = new LinkedHashMap<>();
         private final Deque<String> pathStack = new ArrayDeque<>();
         private boolean keepDuplicates;
+
+        private State copy() {
+            State copy = new State();
+            copy.keyCounts.putAll(this.keyCounts);
+            copy.languageEntries.putAll(this.languageEntries);
+            copy.textToKey.putAll(this.textToKey);
+            copy.typeCounts.putAll(this.typeCounts);
+            copy.pathStack.addAll(this.pathStack);
+            copy.keepDuplicates = this.keepDuplicates;
+            return copy;
+        }
+    }
+
+    public static final class Transaction implements AutoCloseable {
+        private final State rollbackState;
+        private boolean committed;
+        private boolean closed;
+
+        private Transaction(State rollbackState) {
+            this.rollbackState = rollbackState;
+        }
+
+        public void commit() {
+            if (this.closed) throw new IllegalStateException("Transaction is already closed");
+            this.committed = true;
+        }
+
+        @Override
+        public void close() {
+            if (this.closed) return;
+            this.closed = true;
+            if (!this.committed) STATE.set(this.rollbackState);
+        }
     }
 
     public static final class Scope implements AutoCloseable {

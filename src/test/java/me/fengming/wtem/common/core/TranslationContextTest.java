@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -82,5 +84,31 @@ class TranslationContextTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void rollsBackUncommittedTransaction() {
+        TranslationContext.setKey("entity.zombie.1.name");
+        try (var ignored = TranslationContext.beginTransaction()) {
+            TranslationContext.addEntry("Temporary");
+            TranslationContext.increaseTypeCounts("entity.zombie");
+        }
+
+        assertEquals(Map.of(), TranslationContext.snapshot());
+        assertEquals(1, TranslationContext.getTypeCounts("entity.zombie"));
+        assertEquals("entity.zombie.1.name", TranslationContext.getKey());
+    }
+
+    @Test
+    void keepsCommittedTransaction() {
+        TranslationContext.setKey("entity.zombie.1.name");
+        try (var transaction = TranslationContext.beginTransaction()) {
+            TranslationContext.addEntry("Persistent");
+            transaction.commit();
+        }
+
+        assertEquals(
+                Map.of("entity.zombie.1.name", "Persistent"),
+                TranslationContext.snapshot());
     }
 }

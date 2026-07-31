@@ -1,6 +1,6 @@
 package me.fengming.wtem.common.core.misc;
 
-import me.fengming.wtem.common.core.TranslationContext;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.TranslationUtils;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.numbers.FixedFormat;

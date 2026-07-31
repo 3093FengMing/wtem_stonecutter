@@ -16,7 +16,9 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.server.packs.resources.IoSupplier;
 
-/** Reads resource data and writes output through an atomic temporary-file replacement.
+/**
+ * Reads resource data and writes output through an atomic temporary-file replacement.
+ *
  * @author FengMing
  */
 public final class ResourceIo {

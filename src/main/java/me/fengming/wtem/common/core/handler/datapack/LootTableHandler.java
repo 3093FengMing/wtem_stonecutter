@@ -12,8 +12,11 @@ import me.fengming.wtem.common.util.ResourceIo;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.IoSupplier;
 
-/** Recursively processes loot-table entries and functions without changing the root schema.
- * @author FengMing*/
+/**
+ * Recursively processes loot-table entries and functions without changing the root schema.
+ *
+ * @author FengMing
+ */
 public class LootTableHandler extends NonExtraResourceHandler {
     private static final Set<String> COMPOSITE_ENTRY_TYPES =
             Set.of("group", "alternatives", "sequence");
@@ -25,11 +28,11 @@ public class LootTableHandler extends NonExtraResourceHandler {
     }
 
     @Override
-    protected void innerHandle(Identifier rl, IoSupplier<InputStream> supplier) {
+    protected boolean innerHandle(Identifier rl, IoSupplier<InputStream> supplier) {
         JsonElement source = ResourceIo.readJson(supplier, "");
+        JsonElement original = source.deepCopy();
         if (!source.isJsonObject()) {
-            ResourceIo.writeString(getFilePath(rl), GSON.toJson(source));
-            return;
+            return false;
         }
 
         JsonObject table = source.getAsJsonObject();
@@ -42,14 +45,17 @@ public class LootTableHandler extends NonExtraResourceHandler {
                 processEntries(pool, "entries");
             }
         }
-        ResourceIo.writeString(getFilePath(rl), GSON.toJson(table));
+        boolean changed = !table.equals(original);
+        if (changed) ResourceIo.writeJson(getFilePath(rl), table);
+        return changed;
     }
 
     public static JsonObject processLootEntry(JsonObject entry) {
         processFunctions(entry);
         if (!entry.has("type")) return entry;
 
-        String type = ResourceIds.path(entry.get("type").getAsString());
+        if (!entry.get("type").isJsonPrimitive()) return entry;
+        String type = ResourceIds.vanillaPath(entry.get("type").getAsString());
         if (COMPOSITE_ENTRY_TYPES.contains(type)) processEntries(entry, "children");
         return entry;
     }

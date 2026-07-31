@@ -16,6 +16,10 @@ stonecutter parameters {
             replace("ResourceLocation", "Identifier")
         }
 
+        string(current.parsed >= "1.21.11", "resource_key_api") {
+            replace(".location()", ".identifier()")
+        }
+
         string(current.parsed >= "1.21.11", "nbt_api") {
             replace(".getAsString()", ".value()")
             replace(".getAllKeys()", ".keySet()")
