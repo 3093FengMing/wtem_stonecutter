@@ -1,6 +1,7 @@
 package me.fengming.wtem.common.core.handler;
 
 import me.fengming.wtem.common.core.visitor.EntityTagVisitor;
+import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -34,12 +35,12 @@ public class StructureTemplateWHandler extends AbstractWHandler<CompoundTag> {
     @Override
     protected boolean innerHandle(CompoundTag tag) {
         BlockEntityWHandler beHandler = new BlockEntityWHandler();
-        boolean changed = false;
+        ChangeTracker tracker = new ChangeTracker();
         ListTag blocks = NbtUtils.getList(tag, "blocks", CompoundTag.TAG_COMPOUND);
         for (int i = 0; i < blocks.size(); i++) {
             CompoundTag block = NbtUtils.getCompound(blocks, i);
             if (!block.contains("nbt")) continue;
-            changed |= beHandler.handle(NbtUtils.getCompound(block, "nbt"));
+            tracker.add(beHandler.handle(NbtUtils.getCompound(block, "nbt")));
         }
 
         EntityTagVisitor entityVisitor = new EntityTagVisitor();
@@ -49,7 +50,8 @@ public class StructureTemplateWHandler extends AbstractWHandler<CompoundTag> {
             if (!entity.contains("nbt")) continue;
             NbtUtils.getCompound(entity, "nbt").accept(entityVisitor);
         }
-        return changed || entityVisitor.isChanged();
+        tracker.add(entityVisitor.isChanged());
+        return tracker.isChanged();
     }
 
     public record Result(CompoundTag tag, boolean changed) {}

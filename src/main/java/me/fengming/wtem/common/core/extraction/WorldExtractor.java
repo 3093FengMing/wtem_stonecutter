@@ -2,6 +2,7 @@ package me.fengming.wtem.common.core.extraction;
 
 import com.mojang.datafixers.DataFixer;
 import me.fengming.wtem.common.Wtem;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.service.ExtractionProgress;
 import me.fengming.wtem.common.core.extraction.service.ExtractionReport;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
@@ -13,6 +14,7 @@ import me.fengming.wtem.common.core.handler.datapack.ResourceHandler;
 import me.fengming.wtem.common.core.handler.datapack.ResourceHandlers;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.core.misc.CustomScoreBoard;
+import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.DirectoryPublisher;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIo;
@@ -37,7 +39,7 @@ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemp
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.level.storage.LevelStorageSource;
 import net.minecraft.util.worldupdate.WorldUpgrader;
-//? if >=1.21.11
+//? if >=1.21.5
 import net.minecraft.world.scores.ScoreboardSaveData;
 //? if >=26.1 {
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -95,6 +97,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     private final LevelStorageSource.LevelStorageAccess levelStorage;
     private final RegistryAccess registry;
     private final StructureTemplateManager structureManager;
+    private final WtemConfig config = WtemConfig.active();
 
     public WorldExtractor(DataFixer dataFixer,
                           WorldStem worldStem,
@@ -102,7 +105,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                           RegistryAccess registry
     ) {
         super(levelStorage, dataFixer,
-                //? if >=1.21.11 <26.1
+                //? if >=1.21.5 <26.1
                 //worldStem.worldData(),
                 registry, false, false);
         this.dataFixer = dataFixer;
@@ -246,6 +249,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                     for (var factory : ResourceHandlers.all()) {
                         if (shouldStop()) break;
                         var handler = factory.newHandler(filePath, context);
+                        if (!this.config.isResourceEnabled(handler.getPath())) continue;
                         Map<String, PackResource> resources = new TreeMap<>();
                         pack.listResources(
                                 PackType.SERVER_DATA,
@@ -355,15 +359,14 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     public void extractBossBar() {
         //? if >=26.1 {
         CustomBossEvents events = this.overworldSavedDataStorage.computeIfAbsent(CustomBossEvents.TYPE);
-        boolean changed = false;
+        ChangeTracker tracker = new ChangeTracker();
         for (var event : events.getEvents()) {
             var original = event.getName();
             var translated = TranslationUtils.translateLiteral(original);
-            if (translated == original) continue;
+            if (!tracker.add(translated != original)) continue;
             event.setName(translated);
-            changed = true;
         }
-        if (changed) {
+        if (tracker.isChanged()) {
             events.setDirty();
             this.session.recordModifiedSavedData();
         }
@@ -371,13 +374,13 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         /*WorldData worldData = this.worldStem.worldData();
         CompoundTag bossBarTag = worldData.getCustomBossEvents();
         if (bossBarTag == null) return;
-        boolean changed = false;
+        ChangeTracker tracker = new ChangeTracker();
         for (String key : NbtUtils.getKeys(bossBarTag)) {
-            changed |=
+            tracker.add(
                     TranslationUtils.translateNbtString(
-                            NbtUtils.getCompound(bossBarTag, key), "Name");
+                            NbtUtils.getCompound(bossBarTag, key), "Name"));
         }
-        if (!changed) return;
+        if (!tracker.isChanged()) return;
         worldData.setCustomBossEvents(bossBarTag);
         this.levelStorage.saveDataTag(this.registry, worldData, null);
         this.session.recordModifiedSavedData();
@@ -399,6 +402,14 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             data.setData(sb.store());
             this.session.recordModifiedSavedData();
         }
+        *///?} else if >=1.21.5 {
+        /*// Reading through the descriptor populates `sb` as a side effect, because the save data
+        // is a view over the scoreboard rather than a separate snapshot.
+        ScoreboardSaveData data = this.overworldDataStorage.computeIfAbsent(sb.dataType());
+        if (sb.extract()) {
+            data.setDirty();
+            this.session.recordModifiedSavedData();
+        }
         *///?} else {
         /*this.overworldDataStorage.get(sb.dataFactory(), "scoreboard");
         if (sb.extract()) this.session.recordModifiedSavedData();
@@ -407,7 +418,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     //? if >=26.1 {
     private void runExtractionSafely() {
-        TranslationContext.clear();
+        beginRun();
         try {
             FunctionHandler.initializeParser(this.registry, this.session.diagnostics());
             runExtraction();
@@ -426,9 +437,12 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     }
 
     private void runExtraction() {
-        work(DataFixTypes.CHUNK, new BlockEntityWHandler(), "region");
-        if (shouldStop()) return;
-        work(DataFixTypes.ENTITY_CHUNK, new EntityWHandler(), "entities");
+        runStage(
+                WtemConfig.Stage.REGION,
+                () -> work(DataFixTypes.CHUNK, new BlockEntityWHandler(), "region"));
+        runStage(
+                WtemConfig.Stage.ENTITIES,
+                () -> work(DataFixTypes.ENTITY_CHUNK, new EntityWHandler(), "entities"));
         if (shouldStop()) return;
 
         runNonRegionExtraction();
@@ -458,14 +472,26 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     /*@Override
     public void work() {
-        TranslationContext.clear();
+        beginRun();
         try {
             FunctionHandler.initializeParser(this.registry, this.session.diagnostics());
-            new ChunkExtractor(new BlockEntityWHandler(), DataFixTypes.CHUNK, "region").upgrade();
-            if (!shouldStop()) {
-                new ChunkExtractor(new EntityWHandler(), DataFixTypes.ENTITY_CHUNK, "entities").upgrade();
-                if (!shouldStop()) runNonRegionExtraction();
-            }
+            runStage(
+                    WtemConfig.Stage.REGION,
+                    () ->
+                            new ChunkExtractor(
+                                            new BlockEntityWHandler(),
+                                            DataFixTypes.CHUNK,
+                                            "region")
+                                    .upgrade());
+            runStage(
+                    WtemConfig.Stage.ENTITIES,
+                    () ->
+                            new ChunkExtractor(
+                                            new EntityWHandler(),
+                                            DataFixTypes.ENTITY_CHUNK,
+                                            "entities")
+                                    .upgrade());
+            if (!shouldStop()) runNonRegionExtraction();
             if (!shouldStop()) saveLegacySavedData();
             finishRun();
         } catch (Throwable throwable) {
@@ -492,13 +518,20 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     *///?}
 
     private void runNonRegionExtraction() {
-        extractScoreBoard();
-        if (shouldStop()) return;
-        extractBossBar();
-        if (shouldStop()) return;
-        extractDatapacks();
-        if (shouldStop()) return;
-        extractStructures();
+        runStage(WtemConfig.Stage.SCOREBOARD, this::extractScoreBoard);
+        runStage(WtemConfig.Stage.BOSS_BAR, this::extractBossBar);
+        runStage(WtemConfig.Stage.DATAPACKS, this::extractDatapacks);
+        runStage(WtemConfig.Stage.GENERATED_STRUCTURES, this::extractStructures);
+    }
+
+    private void runStage(WtemConfig.Stage stage, Runnable extraction) {
+        if (shouldStop() || !this.config.isEnabled(stage)) return;
+        extraction.run();
+    }
+
+    private void beginRun() {
+        TranslationContext.clear();
+        TranslationContext.setKeyReuse(this.config.keyReuse());
     }
 
     private boolean shouldStop() {
@@ -548,7 +581,9 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     }
 
     private Path languageOutput() {
-        return this.levelStorage.getLevelPath(LevelResource.ROOT).resolve("en_us.json");
+        return this.levelStorage
+                .getLevelPath(LevelResource.ROOT)
+                .resolve(this.config.languageFile());
     }
 
     public static void exportLanguage(Path file) {
@@ -608,12 +643,12 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         }
 
         private boolean process(SimpleRegionStorage storage, ChunkPos chunkPos, CompoundTag compoundTag) {
-            boolean isUpdated = false;
+            ChangeTracker tracker = new ChangeTracker();
             ListTag list = NbtUtils.getList(compoundTag, handler.getName(), Tag.TAG_COMPOUND);
             for (int i = 0; i < list.size(); i++) {
-                isUpdated |= this.handler.handle(NbtUtils.getCompound(list, i));
+                tracker.add(this.handler.handle(NbtUtils.getCompound(list, i)));
             }
-            if (!isUpdated) return false;
+            if (!tracker.isChanged()) return false;
             if (this.previousWriteFuture != null) this.previousWriteFuture.join();
             this.previousWriteFuture = storage.write(chunkPos, /*?if >=26.1 >>'compoundTag'*/() -> compoundTag);
             WorldExtractor.this.session.recordModifiedChunk();

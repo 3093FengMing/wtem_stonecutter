@@ -2,6 +2,7 @@ package me.fengming.wtem.common.core.visitor;
 
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
+import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIds;
 import me.fengming.wtem.common.util.TranslationUtils;
@@ -15,10 +16,10 @@ import net.minecraft.nbt.Tag;
  * @author FengMing
  */
 public class ItemTagVisitor implements SimpleTagVisitor {
-    private boolean changed;
+    private final ChangeTracker tracker = new ChangeTracker();
 
     public boolean isChanged() {
-        return this.changed;
+        return this.tracker.isChanged();
     }
 
     @Override
@@ -38,17 +39,15 @@ public class ItemTagVisitor implements SimpleTagVisitor {
     /**
      * Visits a component patch that is not wrapped in a complete item stack, as used by predicates
      * and the {@code set_components} loot function.
+     *
+     * <p>Without an owning item there is no type to count, so the caller's key is used as-is.
      */
     public void visitComponents(CompoundTag components) {
         if (components.isEmpty()) return;
 
         try (var traversal = NbtTraversalGuard.enter()) {
             if (!traversal.entered()) return;
-            this.changed |= translateItemText(components);
-            this.changed |= handleAttributeModifiers(components);
-            this.changed |= handleBook(components);
-            handleNestedItems(components);
-            this.changed |= handleNestedData(components);
+            visitPatch(components, null);
         }
     }
 
@@ -57,21 +56,9 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         if (components.isEmpty()) return;
 
         String type = itemId == null || itemId.isBlank() ? "unknown" : ResourceIds.path(itemId);
-        String countType = "item." + type;
-        int itemIndex = TranslationContext.getTypeCounts(countType);
-
-        try (var traversal = NbtTraversalGuard.enter();
-                var ignored = TranslationContext.pushKey(countType + "." + itemIndex)) {
+        try (var traversal = NbtTraversalGuard.enter()) {
             if (!traversal.entered()) return;
-
-            boolean translated = translateItemText(components);
-            translated |= handleAttributeModifiers(components);
-            this.changed |= translated;
-            if (translated) TranslationContext.increaseTypeCounts(countType);
-
-            this.changed |= handleBook(components);
-            handleNestedItems(components);
-            this.changed |= handleNestedData(components);
+            visitKeyedPatch("item." + type, components);
         }
     }
 
@@ -84,38 +71,50 @@ public class ItemTagVisitor implements SimpleTagVisitor {
             String itemId = ResourceIds.path(NbtUtils.getString(item, "id"));
             if (itemId.isBlank()) return;
 
-            CompoundTag components = NbtUtils.getCompound(item, "components");
-            String countType = "item." + itemId;
-            int itemIndex = TranslationContext.getTypeCounts(countType);
-            String itemKey = countType + "." + itemIndex;
-
-            try (var ignored = TranslationContext.pushKey(itemKey)) {
-                boolean translated = translateItemText(components);
-                translated |= handleAttributeModifiers(components);
-                this.changed |= translated;
-                if (translated) TranslationContext.increaseTypeCounts(countType);
-
-                this.changed |= handleBook(components);
-                handleNestedItems(components);
-                this.changed |= handleNestedData(components);
-            }
+            visitKeyedPatch("item." + itemId, NbtUtils.getCompound(item, "components"));
         }
     }
 
+    private void visitKeyedPatch(String countType, CompoundTag components) {
+        int itemIndex = TranslationContext.getTypeCounts(countType);
+        try (var ignored = TranslationContext.pushKey(countType + "." + itemIndex)) {
+            visitPatch(components, countType);
+        }
+    }
+
+    /**
+     * Translates every text-carrying component in a patch.
+     *
+     * <p>{@code countType} advances the upstream per-item counter, and is null when the patch has no
+     * owning item to count.
+     */
+    private void visitPatch(CompoundTag components, String countType) {
+        ChangeTracker item = new ChangeTracker();
+        item.add(translateItemText(components));
+        item.add(handleAttributeModifiers(components));
+        if (this.tracker.add(item.isChanged()) && countType != null) {
+            TranslationContext.increaseTypeCounts(countType);
+        }
+
+        this.tracker.add(handleBook(components));
+        handleNestedItems(components);
+        this.tracker.add(handleNestedData(components));
+    }
+
     private static boolean translateItemText(CompoundTag components) {
-        boolean translated =
+        ChangeTracker tracker = new ChangeTracker();
+        tracker.add(
                 TranslationUtils.translateNbtComponent(
-                        components, "minecraft:custom_name", "name");
-        translated |=
+                        components, "minecraft:custom_name", "name"));
+        tracker.add(
                 TranslationUtils.translateNbtComponent(
-                        components, "minecraft:item_name", "item_name");
+                        components, "minecraft:item_name", "item_name"));
 
         ListTag lore = NbtUtils.getList(components, "minecraft:lore");
         for (int i = 0; i < lore.size(); i++) {
-            translated |=
-                    TranslationUtils.translateNbtComponent(lore, i, "lore.line" + i);
+            tracker.add(TranslationUtils.translateNbtComponent(lore, i, "lore.line" + i));
         }
-        return translated;
+        return tracker.isChanged();
     }
 
     private static boolean handleBook(CompoundTag components) {
@@ -124,48 +123,47 @@ public class ItemTagVisitor implements SimpleTagVisitor {
 
         CompoundTag book = NbtUtils.getCompound(components, componentName);
         int bookIndex = TranslationContext.getTypeCounts("book");
-        boolean translated = false;
+        ChangeTracker tracker = new ChangeTracker();
 
         try (var ignored = TranslationContext.pushKey("book." + bookIndex)) {
             ListTag pages = NbtUtils.getList(book, "pages", Tag.TAG_COMPOUND);
             for (int i = 0; i < pages.size(); i++) {
                 CompoundTag page = NbtUtils.getCompound(pages, i);
-                translated |=
+                tracker.add(
+                        TranslationUtils.translateNbtComponent(page, "raw", "content.page" + i));
+                tracker.add(
                         TranslationUtils.translateNbtComponent(
-                                page, "raw", "content.page" + i);
-                translated |=
-                        TranslationUtils.translateNbtComponent(
-                                page, "filtered", "content.page" + i + ".filtered");
+                                page, "filtered", "content.page" + i + ".filtered"));
             }
 
             if (!components.contains("minecraft:custom_name")) {
                 String title = NbtUtils.getString(NbtUtils.getCompound(book, "title"), "raw");
-                translated |=
+                tracker.add(
                         TranslationUtils.putTranslatedNbtComponent(
                                 components,
                                 "minecraft:custom_name",
                                 title,
                                 true,
-                                "title");
+                                "title"));
             }
         }
 
-        if (translated) TranslationContext.increaseTypeCounts("book");
-        return translated;
+        if (tracker.isChanged()) TranslationContext.increaseTypeCounts("book");
+        return tracker.isChanged();
     }
 
     private static boolean handleAttributeModifiers(CompoundTag components) {
         ListTag modifiers = NbtUtils.getList(components, "minecraft:attribute_modifiers");
-        boolean translated = false;
+        ChangeTracker tracker = new ChangeTracker();
         for (int i = 0; i < modifiers.size(); i++) {
             CompoundTag modifier = NbtUtils.getCompound(modifiers, i);
-            translated |=
+            tracker.add(
                     TranslationUtils.translateNbtComponent(
                             modifier,
                             "display.value",
-                            "attribute_modifier." + i + ".display");
+                            "attribute_modifier." + i + ".display"));
         }
-        return translated;
+        return tracker.isChanged();
     }
 
     private void handleNestedItems(CompoundTag components) {

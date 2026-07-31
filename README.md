@@ -4,13 +4,17 @@ WTEM 是一个纯客户端的 Fabric 模组，用于把 Minecraft 世界、世�
 
 ## 支持版本
 
-| 发布版本  | 对应游戏版本  | Java |
-|-----------|---------------|------|
-| `1.21.1`  | [1.21,1.21.4) | 21   |
-| `1.21.4`  | 1.21.4        | 21   |
-| `1.21.11` | 1.21.11       | 21   |
-| `26.1.x`  | [26.1,26.2)   | 25   |
-| `26.2.x`  | 26.2          | 25   |
+| 发布版本  | 对应游戏版本     | Java |
+|-----------|------------------|------|
+| `1.21.1`  | 1.21 ~ 1.21.1    | 21   |
+| `1.21.3`  | 1.21.2 ~ 1.21.3  | 21   |
+| `1.21.4`  | 1.21.4           | 21   |
+| `1.21.5`  | 1.21.5           | 21   |
+| `1.21.8`  | 1.21.6 ~ 1.21.8  | 21   |
+| `1.21.10` | 1.21.9 ~ 1.21.10 | 21   |
+| `1.21.11` | 1.21.11          | 21   |
+| `26.1.x`  | 26.1 ~ 26.1.2    | 25   |
+| `26.2.x`  | 26.2             | 25   |
 
 ## 使用方法
 
@@ -33,7 +37,39 @@ WTEM 是一个纯客户端的 Fabric 模组，用于把 Minecraft 世界、世�
 WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发生变化的资源和有效的 `pack.mcmeta`。
 重新进入世界前，请在数据包配置中确认覆盖包已启用，并位于原包之上。
 
-遇到相同文本时，翻译键默认复用同一个键。
+遇到相同文本时，翻译键默认复用同一个键，可以在下方的配置中设置复用策略。
+
+## 配置
+
+首次启动会在 `config/wtem.json` 生成默认配置，其中列出全部可用开关。每一项都是可选的，缺省即保持内置行为；文件格式错误只会记录日志并回退到默认值，不会中断提取。
+
+```json
+{
+  "stages": {
+    "region": true,
+    "entities": true,
+    "scoreboard": true,
+    "boss_bar": true,
+    "datapacks": true,
+    "generated_structures": true
+  },
+  "resources": {
+    "function": false
+  },
+  "key_reuse": {
+    "default": true,
+    "overrides": {
+      "datapack.": false
+    }
+  },
+  "language_file": "en_us.json"
+}
+```
+
+- `stages`：按提取阶段开关。`region` 是区块中的方块实体，`entities` 是实体区块，其余对应记分板、bossbar、世界数据包和世界生成结构。
+- `resources`：按数据包资源类型开关，键为注册目录名。可用值：`advancement`、`enchantment`、`jukebox_song`、`trim_material`、`trim_pattern`、`painting_variant`、`instrument`、`dialog`、`dimension_type`、`item_modifier`、`loot_table`、`predicate`、`function`、`structure`。未列出的按启用处理。
+- `key_reuse`：相同文本是否复用已有的翻译键。`default` 是全局策略，`overrides` 按键前缀覆盖，命中的最长前缀生效。需要同一段文本在不同位置分别翻译时把对应前缀设为 `false`。
+- `language_file`：写入世界目录的语言文件名。只接受纯文件名，包含路径分隔符或非 `.json` 后缀时会被忽略。
 
 ## 目前提取范围
 
@@ -84,4 +120,4 @@ PowerShell 示例：
 
 本项目使用 [CC0-1.0](LICENSE)。
 
-参考了 [WorldTranslationExtractor](https://github.com/5uso/WorldTranslationExtractor)。Minecraft 版本兼容由 [Stonecutter](https://stonecutter.kikugie.dev/) 管理。
+参考了 [WorldTranslationExtractor](https://github.com/5uso/WorldTranslationExtractor)。

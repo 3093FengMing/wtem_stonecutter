@@ -8,6 +8,8 @@ import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
+import me.fengming.wtem.common.config.WtemConfig;
 
 /**
  * @author FengMing
@@ -32,7 +34,10 @@ public final class TranslationContext {
     }
 
     public static void increaseTypeCounts(String type) {
-        state().typeCounts.merge(type, 1, Integer::sum);
+        // Counting starts at 1, so the stored value has to be derived from the same default that
+        // getTypeCounts reports. Merging onto an absent key would store 1 again and waste the first
+        // increment, making the second occurrence of a type reuse index 1.
+        state().typeCounts.put(type, getTypeCounts(type) + 1);
     }
 
     public static int nextTypeCount(String type) {
@@ -54,34 +59,31 @@ public final class TranslationContext {
      * Adds a translation entry using the current path as its base key.
      *
      * <p>The allocation order follows the upstream extractor: the first use keeps the base key, while
-     * subsequent uses receive {@code .1}, {@code .2}, and so on. Identical text is reused unless
-     * duplicate entries have explicitly been enabled.
+     * subsequent uses receive {@code .1}, {@code .2}, and so on. Identical text reuses the key it was
+     * first given, unless the configured reuse policy or {@code keepDuplicates} opts out.
      */
     public static String addEntry(String value) {
-        State state = state();
-        if (!state.keepDuplicates) {
-            String existing = state.textToKey.get(value);
-            if (existing != null) return existing;
-        }
-
-        String key = allocateKey(currentPath());
-        state.languageEntries.put(key, value);
-        if (!state.keepDuplicates) state.textToKey.put(value, key);
-        return key;
+        return store(currentPath(), value, TranslationContext::allocateKey);
     }
 
     /** Compatibility entry point for callers that already have a base key. */
     public static String addKey(String key, String value) {
+        return store(key, value, TranslationContext::uniqueKey);
+    }
+
+    private static String store(
+            String baseKey, String value, UnaryOperator<String> keyAllocator) {
         State state = state();
-        if (!state.keepDuplicates) {
+        boolean reuse = !state.keepDuplicates && state.keyReuse.allows(baseKey);
+        if (reuse) {
             String existing = state.textToKey.get(value);
             if (existing != null) return existing;
         }
 
-        String actualKey = uniqueKey(key);
-        state.languageEntries.put(actualKey, value);
-        if (!state.keepDuplicates) state.textToKey.put(value, actualKey);
-        return actualKey;
+        String key = keyAllocator.apply(baseKey);
+        state.languageEntries.put(key, value);
+        if (reuse) state.textToKey.put(value, key);
+        return key;
     }
 
     public static String exportLanguage() {
@@ -98,6 +100,11 @@ public final class TranslationContext {
 
     public static boolean isKeepingDuplicates() {
         return state().keepDuplicates;
+    }
+
+    /** Applies the configured per-key reuse policy to subsequent entries. */
+    public static void setKeyReuse(WtemConfig.KeyReuse keyReuse) {
+        state().keyReuse = keyReuse;
     }
 
     public static void revert() {
@@ -165,6 +172,7 @@ public final class TranslationContext {
         private final Map<String, Integer> typeCounts = new LinkedHashMap<>();
         private final Deque<String> pathStack = new ArrayDeque<>();
         private boolean keepDuplicates;
+        private WtemConfig.KeyReuse keyReuse = WtemConfig.KeyReuse.DEFAULT;
 
         private State copy() {
             State copy = new State();
@@ -174,6 +182,7 @@ public final class TranslationContext {
             copy.typeCounts.putAll(this.typeCounts);
             copy.pathStack.addAll(this.pathStack);
             copy.keepDuplicates = this.keepDuplicates;
+            copy.keyReuse = this.keyReuse;
             return copy;
         }
     }

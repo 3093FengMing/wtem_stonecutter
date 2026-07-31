@@ -101,6 +101,65 @@ class FunctionHandlerTest {
         assertEquals("Storage", TranslationContext.snapshot().get("container.chest.1.name"));
     }
 
+    @Test
+    void translatesMacroLineWithoutInterpolations() {
+        String command = "$title @a title {\"text\":\"Hello\"}";
+
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertNotEquals(command, result, result);
+        assertTrue(result.startsWith("$title @a title "), result);
+        assertTrue(result.contains("translate"), result);
+        assertEquals("Hello", TranslationContext.snapshot().get("datapack.test.function"));
+    }
+
+    @Test
+    void keepsMacroVariablesInsideTranslatableArguments() {
+        String command = "$title @a title {\"text\":\"Hello $(name)\"}";
+
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertEquals(command, result);
+        assertTrue(TranslationContext.snapshot().isEmpty(), TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void translatesMacroLineArgumentBesideAnInterpolatedArgument() {
+        String command =
+                "$give @s minecraft:paper[minecraft:custom_name='{\"text\":\"Hello\"}'] $(count)";
+
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertNotEquals(command, result, result);
+        assertTrue(result.startsWith("$give @s "), result);
+        assertTrue(result.endsWith(" $(count)"), result);
+        assertTrue(result.contains("translate"), result);
+        assertEquals("Hello", TranslationContext.snapshot().get("item.paper.1.name"));
+    }
+
+    @Test
+    void translatesMacroLineWhereInterpolationSpansAWholeArgument() {
+        String command = "$title @a title {\"text\":\"Hello\"} $(extra)";
+
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertEquals(command, result);
+        assertTrue(TranslationContext.snapshot().isEmpty(), TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void leavesInterpolatedResourceArgumentUntouched() {
+        String command = "$setblock ~ ~ ~ $(block)";
+
+        assertEquals(command, FunctionHandler.processFunction(List.of(command)));
+        assertTrue(TranslationContext.snapshot().isEmpty(), TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void treatsLoneMacroMarkerAsUntranslatable() {
+        assertEquals("$", FunctionHandler.processFunction(List.of("$")));
+    }
+
     private static String mergeContinuationLines(String value) {
         return value.replaceAll("\\\\[ \\t]*\\R[ \\t]*", "");
     }

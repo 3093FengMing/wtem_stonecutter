@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Function;
+import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.ResourceIo;
 import me.fengming.wtem.common.util.TranslationUtils;
 import net.minecraft.resources.Identifier;
@@ -35,12 +36,12 @@ public class SimpleJsonHandler extends ResourceHandler {
         }
 
         JsonObject jsonObj = root.getAsJsonObject();
-        boolean changed = false;
+        ChangeTracker tracker = new ChangeTracker();
         for (String s : list) {
-            changed |= TranslationUtils.translateJsonElement(jsonObj, s);
+            tracker.add(TranslationUtils.translateJsonElement(jsonObj, s));
         }
-        if (changed) ResourceIo.writeJson(getFilePath(rl), jsonObj);
-        return changed;
+        if (tracker.isChanged()) ResourceIo.writeJson(getFilePath(rl), jsonObj);
+        return tracker.isChanged();
     }
 
 }

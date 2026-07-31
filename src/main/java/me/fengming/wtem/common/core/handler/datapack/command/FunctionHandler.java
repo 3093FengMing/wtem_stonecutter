@@ -104,17 +104,21 @@ public class FunctionHandler extends NonExtraResourceHandler {
                     FunctionSource.LogicalCommand.read(lines, i);
             i = logicalLine.lastLineIndex();
 
-            String command = logicalLine.value();
-            if (command.isEmpty() || command.startsWith("#") || command.startsWith("$")) continue;
+            String source = logicalLine.value();
+            if (source.isEmpty() || source.startsWith("#")) continue;
+
+            CommandLine line = CommandLine.of(source);
+            if (line.text().isEmpty()) continue;
 
             try (var transaction = TranslationContext.beginTransaction()) {
-                List<Replacement> replacements = findReplacements(parser, command);
+                List<Replacement> replacements = findReplacements(parser, line);
                 if (replacements.isEmpty()) continue;
 
-                String updated = applyReplacements(command, replacements);
-                if (!isValidCommand(parser, updated)) continue;
+                // Validation has to run against the masked form, because the interpolations a macro
+                // line carries are not valid command syntax on their own.
+                if (!isValidCommand(parser, applyReplacements(line.text(), replacements))) continue;
 
-                logicalLine.write(modified, updated);
+                logicalLine.write(modified, line.render(replacements));
                 transaction.commit();
                 changed = true;
             }
@@ -170,14 +174,16 @@ public class FunctionHandler extends NonExtraResourceHandler {
                 null);
     }
 
-    private static List<Replacement> findReplacements(ParserContext parser, String command) {
+    private static List<Replacement> findReplacements(ParserContext parser, CommandLine line) {
+        String command = line.text();
         try {
             ParseResults<CommandSourceStack> results =
                     parser.commands().getDispatcher().parse(command, parser.source());
             if (results.getReader().canRead()) {
-                ExtractionDiagnostics diagnostics = COMMAND_DIAGNOSTICS.get();
-                if (diagnostics != null) {
-                    diagnostics.record(
+                // A masked interpolation is only a plausible stand-in, not necessarily a valid one,
+                // so a macro line that fails to parse is expected rather than a defect to report.
+                if (!line.macro()) {
+                    recordCommandFailure(
                             "function_parse",
                             command,
                             new IllegalArgumentException(
@@ -199,15 +205,25 @@ public class FunctionHandler extends NonExtraResourceHandler {
                                     + argument.getRange().getEnd();
                     if (replacements.containsKey(rangeKey)) continue;
 
+                    // Replacing an argument drops its original text. Where that text carries an
+                    // interpolation the substitution would delete the macro variable, so such an
+                    // argument is left alone even though it parsed cleanly against the mask.
+                    if (line.isMasked(
+                            argument.getRange().getStart(), argument.getRange().getEnd())) {
+                        continue;
+                    }
+
+                    String sourceArgument =
+                            command.substring(
+                                    argument.getRange().getStart(), argument.getRange().getEnd());
+
                     try (var transaction = TranslationContext.beginTransaction()) {
                         Replacement replacement =
                                 createReplacement(
                                         context,
                                         entry.getKey(),
                                         argument,
-                                        command.substring(
-                                                argument.getRange().getStart(),
-                                                argument.getRange().getEnd()),
+                                        sourceArgument,
                                         parser.registries());
                         if (replacement == null) continue;
                         transaction.commit();
@@ -221,10 +237,7 @@ public class FunctionHandler extends NonExtraResourceHandler {
             ordered.sort(Comparator.comparingInt(Replacement::start).reversed());
             return List.copyOf(ordered);
         } catch (RuntimeException exception) {
-            ExtractionDiagnostics diagnostics = COMMAND_DIAGNOSTICS.get();
-            if (diagnostics != null) {
-                diagnostics.record("function_command", command, exception);
-            }
+            if (!line.macro()) recordCommandFailure("function_command", command, exception);
             return List.of();
         }
     }
@@ -331,6 +344,69 @@ public class FunctionHandler extends NonExtraResourceHandler {
         }
         return holder.unwrapKey().map(ResourceIds::key);
     }
+
+    /**
+     * A function line presented to the command parser, with macro interpolations masked out.
+     *
+     * <p>A macro line is an ordinary command behind a {@code $} marker, except that {@code $(name)}
+     * interpolations stand where the grammar expects a concrete value. The dispatcher rejects those
+     * outright, which is why macro lines used to be skipped entirely. Replacing each interpolation
+     * with an equal-length placeholder gives the parser something it can accept while keeping every
+     * argument at its original offset, so the ranges it reports still address {@code source}.
+     *
+     * @param source the line exactly as it appears in the function file
+     * @param text the form handed to the parser: marker dropped, interpolations masked
+     * @param masks offsets of the masked regions, in ascending order
+     */
+    private record CommandLine(String source, String text, List<Range> masks) {
+        private static final String MARKER = "$";
+        private static final String VARIABLE_PREFIX = "$(";
+        // A repeated '1' is the least restrictive filler: it satisfies numeric slots, including the
+        // ones that reject zero, and is also valid inside a string or a resource location, whereas a
+        // letter would rule the numeric slots out. A long enough interpolation still overflows a
+        // numeric slot, which simply leaves the line untranslated.
+        private static final char MASK_CHARACTER = '1';
+
+        static CommandLine of(String source) {
+            if (!source.startsWith(MARKER)) return new CommandLine(source, source, List.of());
+
+            String body = source.substring(MARKER.length());
+            StringBuilder masked = new StringBuilder(body);
+            List<Range> masks = new ArrayList<>();
+            int start = body.indexOf(VARIABLE_PREFIX);
+            while (start >= 0) {
+                int end = body.indexOf(')', start);
+                if (end < 0) break;
+                end++;
+
+                masks.add(new Range(start, end));
+                for (int i = start; i < end; i++) masked.setCharAt(i, MASK_CHARACTER);
+                start = body.indexOf(VARIABLE_PREFIX, end);
+            }
+            return new CommandLine(source, masked.toString(), List.copyOf(masks));
+        }
+
+        boolean macro() {
+            return this.source.startsWith(MARKER);
+        }
+
+        /** Reports whether {@code [start, end)} overlaps a masked interpolation. */
+        boolean isMasked(int start, int end) {
+            return this.masks.stream().anyMatch(mask -> mask.start() < end && start < mask.end());
+        }
+
+        /** Applies {@code replacements} to the original line rather than to the masked form. */
+        String render(List<Replacement> replacements) {
+            String body = applyReplacements(this.source.substring(offset()), replacements);
+            return this.macro() ? MARKER + body : body;
+        }
+
+        private int offset() {
+            return this.macro() ? MARKER.length() : 0;
+        }
+    }
+
+    private record Range(int start, int end) {}
 
     private record Replacement(int start, int end, String value) {}
 

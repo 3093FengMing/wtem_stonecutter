@@ -7,6 +7,7 @@ import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.core.visitor.EntityTagVisitor;
 import me.fengming.wtem.common.core.visitor.ItemTagVisitor;
 import me.fengming.wtem.common.core.visitor.SimpleTagVisitor;
+import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIds;
 import me.fengming.wtem.common.util.TranslationUtils;
@@ -45,7 +46,7 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
         ChangeTracker tracker = new ChangeTracker();
         tracker.add(translateCustomName(compound, id));
         compound.accept(getVisitor(id, tracker));
-        return tracker.changed;
+        return tracker.isChanged();
     }
 
     private static boolean translateCustomName(CompoundTag tag, String id) {
@@ -55,12 +56,11 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
         int index = TranslationContext.getTypeCounts(countType);
 
         try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
-            boolean translated =
-                    TranslationUtils.translateNbtComponent(tag, "CustomName", "name");
-            translated |=
-                    TranslationUtils.translateNbtComponent(tag, "custom_name", "name");
-            if (translated) TranslationContext.increaseTypeCounts(countType);
-            return translated;
+            ChangeTracker tracker = new ChangeTracker();
+            tracker.add(TranslationUtils.translateNbtComponent(tag, "CustomName", "name"));
+            tracker.add(TranslationUtils.translateNbtComponent(tag, "custom_name", "name"));
+            if (tracker.isChanged()) TranslationContext.increaseTypeCounts(countType);
+            return tracker.isChanged();
         }
     }
 
@@ -144,7 +144,7 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
 
     private boolean translateSign(CompoundTag tag) {
         int index = TranslationContext.getTypeCounts("sign");
-        boolean translated = false;
+        ChangeTracker tracker = new ChangeTracker();
 
         try (var ignored = TranslationContext.pushKey("sign." + index)) {
             for (String side : List.of("front_text", "back_text")) {
@@ -156,24 +156,23 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
                         if ("filtered_messages".equals(messageType)) {
                             keyPath += ".filtered";
                         }
-                        translated |=
-                                TranslationUtils.translateNbtComponent(messages, i, keyPath);
+                        tracker.add(TranslationUtils.translateNbtComponent(messages, i, keyPath));
                     }
                 }
             }
         }
 
-        if (translated) TranslationContext.increaseTypeCounts("sign");
-        return translated;
+        if (tracker.isChanged()) TranslationContext.increaseTypeCounts("sign");
+        return tracker.isChanged();
     }
 
     private boolean translateCommandBlock(CompoundTag tag) {
         String countType = "command_block";
         int index = TranslationContext.getTypeCounts(countType);
-        boolean changed;
+        ChangeTracker tracker = new ChangeTracker();
         try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
-            changed = TranslationUtils.translateNbtComponent(tag, "LastOutput", "last_output");
-            if (changed) {
+            if (tracker.add(
+                    TranslationUtils.translateNbtComponent(tag, "LastOutput", "last_output"))) {
                 TranslationContext.increaseTypeCounts(countType);
             }
         }
@@ -181,19 +180,10 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
         if (tag.contains("Command")) {
             String originalCommand = NbtUtils.getString(tag, "Command");
             String translatedCommand = FunctionHandler.processFunction(List.of(originalCommand));
-            if (!originalCommand.equals(translatedCommand)) {
+            if (tracker.add(!originalCommand.equals(translatedCommand))) {
                 tag.putString("Command", translatedCommand);
-                changed = true;
             }
         }
-        return changed;
-    }
-
-    private static final class ChangeTracker {
-        private boolean changed;
-
-        private void add(boolean changed) {
-            this.changed |= changed;
-        }
+        return tracker.isChanged();
     }
 }

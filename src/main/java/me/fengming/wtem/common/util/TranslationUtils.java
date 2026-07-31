@@ -289,7 +289,7 @@ public final class TranslationUtils {
 
         JsonObject component = json.getAsJsonObject();
         JsonObject result = component;
-        boolean changed = false;
+        ChangeTracker tracker = new ChangeTracker();
 
         if (isLiteralComponent(component)) {
             String literal = component.get("text").getAsString();
@@ -302,16 +302,16 @@ public final class TranslationUtils {
 
                 result = encoded.getAsJsonObject();
                 copyLiteralMetadata(component, result);
-                changed = true;
+                tracker.add(true);
             }
         }
 
-        changed |= translateComponentProperty(result, "extra");
-        changed |= translateComponentProperty(result, "separator");
-        changed |= translateComponentArguments(result, "with");
-        changed |= translateHoverEvent(result, LEGACY_HOVER_EVENT);
-        changed |= translateHoverEvent(result, HOVER_EVENT);
-        return new TransformResult(result, changed);
+        tracker.add(translateComponentProperty(result, "extra"));
+        tracker.add(translateComponentProperty(result, "separator"));
+        tracker.add(translateComponentArguments(result, "with"));
+        tracker.add(translateHoverEvent(result, LEGACY_HOVER_EVENT));
+        tracker.add(translateHoverEvent(result, HOVER_EVENT));
+        return new TransformResult(result, tracker.isChanged());
     }
 
     private static boolean isLiteralComponent(JsonObject component) {
@@ -366,9 +366,10 @@ public final class TranslationUtils {
 
         String action = hoverEvent.get("action").getAsString();
         if ("show_text".equals(action)) {
-            boolean changed = translateComponentProperty(hoverEvent, "contents");
-            changed |= translateComponentProperty(hoverEvent, "value");
-            return changed;
+            ChangeTracker tracker = new ChangeTracker();
+            tracker.add(translateComponentProperty(hoverEvent, "contents"));
+            tracker.add(translateComponentProperty(hoverEvent, "value"));
+            return tracker.isChanged();
         }
 
         if (!"show_entity".equals(action)) return false;

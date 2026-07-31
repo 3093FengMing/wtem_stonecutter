@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,6 +47,33 @@ class TranslationContextTest {
 
         assertNotEquals(first, second);
         assertEquals(2, TranslationContext.snapshot().size());
+    }
+
+    @Test
+    void appliesConfiguredKeyReusePolicyPerKey() {
+        TranslationContext.setKeyReuse(
+                new WtemConfig.KeyReuse(true, Map.of("datapack.", false)));
+
+        TranslationContext.setKey("entity.zombie.1.name");
+        assertEquals("entity.zombie.1.name", TranslationContext.addEntry("Guard"));
+        TranslationContext.setKey("entity.skeleton.1.name");
+        assertEquals("entity.zombie.1.name", TranslationContext.addEntry("Guard"));
+
+        // Reuse is disabled for this prefix, so the text is extracted again under its own key even
+        // though an entry with the same text already exists.
+        TranslationContext.setKey("datapack.example.function");
+        assertEquals("datapack.example.function", TranslationContext.addEntry("Guard"));
+    }
+
+    @Test
+    void advancesTypeCountsFromTheFirstIncrement() {
+        assertEquals(1, TranslationContext.getTypeCounts("container.chest"));
+
+        TranslationContext.increaseTypeCounts("container.chest");
+        assertEquals(2, TranslationContext.getTypeCounts("container.chest"));
+
+        TranslationContext.increaseTypeCounts("container.chest");
+        assertEquals(3, TranslationContext.getTypeCounts("container.chest"));
     }
 
     @Test

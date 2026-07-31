@@ -2,6 +2,7 @@ package me.fengming.wtem.common.core.visitor;
 
 import java.util.List;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIds;
 import me.fengming.wtem.common.util.TranslationUtils;
@@ -15,10 +16,10 @@ import net.minecraft.nbt.Tag;
  * @author FengMing
  */
 public class EntityTagVisitor implements SimpleTagVisitor {
-    private boolean changed;
+    private final ChangeTracker tracker = new ChangeTracker();
 
     public boolean isChanged() {
-        return this.changed;
+        return this.tracker.isChanged();
     }
 
     @Override
@@ -29,31 +30,30 @@ public class EntityTagVisitor implements SimpleTagVisitor {
             if (!traversal.entered()) return;
 
             String entityId = ResourceIds.path(NbtUtils.getString(tag, "id"));
-            this.changed |= translateEntityText(tag, entityId);
+            this.tracker.add(translateEntityText(tag, entityId));
             visitPassengers(tag);
-            this.changed |= visitItems(tag);
-            this.changed |= visitTrades(tag);
+            this.tracker.add(visitItems(tag));
+            this.tracker.add(visitTrades(tag));
         }
     }
 
     private static boolean translateEntityText(CompoundTag tag, String entityId) {
         String type = entityId.isBlank() ? "unknown" : entityId;
-        boolean changed =
-                translateIndexedComponent(tag, "CustomName", "entity." + type, "name");
+        ChangeTracker tracker = new ChangeTracker();
+        tracker.add(translateIndexedComponent(tag, "CustomName", "entity." + type, "name"));
 
         if ("text_display".equals(entityId)) {
-            changed |= translateIndexedComponent(tag, "text", "text_display", "text");
+            tracker.add(translateIndexedComponent(tag, "text", "text_display", "text"));
         }
         if ("command_block_minecart".equals(entityId)) {
-            changed |= translateIndexedComponent(
-                    tag, "LastOutput", "command_block_minecart", "last_output");
+            tracker.add(
+                    translateIndexedComponent(
+                            tag, "LastOutput", "command_block_minecart", "last_output"));
         }
         if ("mannequin".equals(entityId)) {
-            changed |=
-                    translateIndexedComponent(
-                            tag, "description", "mannequin", "description");
+            tracker.add(translateIndexedComponent(tag, "description", "mannequin", "description"));
         }
-        return changed;
+        return tracker.isChanged();
     }
 
     private static boolean translateIndexedComponent(
