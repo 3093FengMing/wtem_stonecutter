@@ -8,7 +8,7 @@ import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.UnaryOperator;
+import java.util.Random;
 import me.fengming.wtem.common.config.WtemConfig;
 
 /**
@@ -40,14 +40,16 @@ public final class TranslationContext {
         state().typeCounts.put(type, getTypeCounts(type) + 1);
     }
 
-    public static int nextTypeCount(String type) {
-        int count = getTypeCounts(type);
-        increaseTypeCounts(type);
-        return count;
-    }
-
+    /**
+     * Replaces the key below the pinned base.
+     *
+     * <p>Handlers name their own output from scratch rather than extending whatever key their caller
+     * happened to be using, which is what keeps a key stable no matter where the data was found.
+     * {@link #pinKey()} makes that restart stop at a prefix instead of at the root.
+     */
     public static void setKey(String key) {
-        state().pathStack.clear();
+        State state = state();
+        while (state.pathStack.size() > state.baseDepth) state.pathStack.removeLast();
         append(key);
     }
 
@@ -63,27 +65,76 @@ public final class TranslationContext {
      * first given, unless the configured reuse policy or {@code keepDuplicates} opts out.
      */
     public static String addEntry(String value) {
-        return store(currentPath(), value, TranslationContext::allocateKey);
-    }
-
-    /** Compatibility entry point for callers that already have a base key. */
-    public static String addKey(String key, String value) {
-        return store(key, value, TranslationContext::uniqueKey);
-    }
-
-    private static String store(
-            String baseKey, String value, UnaryOperator<String> keyAllocator) {
         State state = state();
-        boolean reuse = !state.keepDuplicates && state.keyReuse.allows(baseKey);
+        String path = currentPath();
+        boolean reuse = !state.keepDuplicates && state.keyReuse.allows(path);
         if (reuse) {
             String existing = state.textToKey.get(value);
             if (existing != null) return existing;
         }
 
-        String key = keyAllocator.apply(baseKey);
+        String key =
+                state.keyNaming.scheme() == WtemConfig.KeyNaming.Scheme.RANDOM
+                        ? randomKey(state)
+                        : allocateKey(state, state.keyNaming.baseKey(path));
         state.languageEntries.put(key, value);
         if (reuse) state.textToKey.put(value, key);
         return key;
+    }
+
+    public static void setKeyNaming(WtemConfig.KeyNaming keyNaming) {
+        state().keyNaming = keyNaming;
+    }
+
+    /**
+     * Seeds the catalog with entries that extracted text may reuse.
+     *
+     * <p>The entries are registered as if they had been extracted, so text matching one of them
+     * receives the seeded key instead of a fresh one. Their keys are also marked as taken, which keeps
+     * a later allocation from appending a suffix onto a name a seeded entry already holds.
+     *
+     * <p>An entry whose text duplicates an earlier one keeps its key in the catalog but does not take
+     * over the reuse mapping: the first entry named a piece of text, and the second renaming it would
+     * make the result depend on the order the file happened to be written in.
+     */
+    public static void setBuiltinEntries(Map<String, String> entries) {
+        State state = state();
+        entries.forEach(
+                (key, value) -> {
+                    state.languageEntries.put(key, value);
+                    state.keyCounts.putIfAbsent(key, 1);
+                    state.textToKey.putIfAbsent(value, key);
+                });
+        state.builtinEntryCount = state.languageEntries.size();
+    }
+
+    /**
+     * Counts the entries extraction produced, excluding the seeded ones.
+     *
+     * <p>Seeded entries exist before anything is read, so counting them would report progress for a
+     * run that found nothing.
+     */
+    public static int extractedEntryCount() {
+        State state = state();
+        return state.languageEntries.size() - state.builtinEntryCount;
+    }
+
+    /**
+     * Draws an unused random key.
+     *
+     * <p>The alphabet is small enough that collisions are expected once a catalog grows, so a taken
+     * key is redrawn rather than suffixed: a suffix would make the key describe its allocation order,
+     * which is the one thing a random key is chosen to avoid.
+     */
+    private static String randomKey(State state) {
+        int length = state.keyNaming.randomLength();
+        for (int attempt = 0; attempt < 64; attempt++) {
+            String candidate = WtemConfig.KeyNaming.randomKey(state.random, length);
+            if (!state.languageEntries.containsKey(candidate)) return candidate;
+        }
+        // Every draw at this length is taken. Growing the key is the only way to stay unique, and is
+        // preferable to overwriting an existing entry.
+        return WtemConfig.KeyNaming.randomKey(state.random, length + 1);
     }
 
     public static String exportLanguage() {
@@ -98,18 +149,8 @@ public final class TranslationContext {
         state().keepDuplicates = keepDuplicates;
     }
 
-    public static boolean isKeepingDuplicates() {
-        return state().keepDuplicates;
-    }
-
-    /** Applies the configured per-key reuse policy to subsequent entries. */
     public static void setKeyReuse(WtemConfig.KeyReuse keyReuse) {
         state().keyReuse = keyReuse;
-    }
-
-    public static void revert() {
-        Deque<String> pathStack = state().pathStack;
-        if (pathStack.size() > 1) pathStack.removeLast();
     }
 
     public static void append(String path) {
@@ -118,15 +159,32 @@ public final class TranslationContext {
     }
 
     public static Scope push(String path) {
-        List<String> previous = new ArrayList<>(state().pathStack);
+        State state = state();
+        List<String> previous = new ArrayList<>(state.pathStack);
         append(path);
-        return new Scope(previous);
+        return new Scope(previous, state.baseDepth);
     }
 
     public static Scope pushKey(String key) {
-        List<String> previous = new ArrayList<>(state().pathStack);
+        State state = state();
+        List<String> previous = new ArrayList<>(state.pathStack);
         setKey(key);
-        return new Scope(previous);
+        return new Scope(previous, state.baseDepth);
+    }
+
+    /**
+     * Keeps the current path as a base that a nested {@link #setKey} will not discard.
+     *
+     * <p>Data nested inside an item stack is reached through a key that already says where it came
+     * from. A handler that restarts its key would throw that away, so the caller can pin the prefix
+     * and have the handler extend it instead.
+     */
+    public static Scope pinKey() {
+        State state = state();
+        List<String> previous = new ArrayList<>(state.pathStack);
+        int previousBaseDepth = state.baseDepth;
+        state.baseDepth = state.pathStack.size();
+        return new Scope(previous, previousBaseDepth);
     }
 
     /**
@@ -145,20 +203,11 @@ public final class TranslationContext {
         return String.join(".", pathStack);
     }
 
-    private static String allocateKey(String baseKey) {
-        Map<String, Integer> keyCounts = state().keyCounts;
+    private static String allocateKey(State state, String baseKey) {
+        Map<String, Integer> keyCounts = state.keyCounts;
         int count = keyCounts.getOrDefault(baseKey, 0);
         keyCounts.put(baseKey, count + 1);
         return count == 0 ? baseKey : baseKey + "." + count;
-    }
-
-    private static String uniqueKey(String baseKey) {
-        State state = state();
-        if (!state.languageEntries.containsKey(baseKey)) {
-            state.keyCounts.putIfAbsent(baseKey, 1);
-            return baseKey;
-        }
-        return allocateKey(baseKey);
     }
 
     private static State state() {
@@ -171,8 +220,16 @@ public final class TranslationContext {
         private final Map<String, String> textToKey = new LinkedHashMap<>();
         private final Map<String, Integer> typeCounts = new LinkedHashMap<>();
         private final Deque<String> pathStack = new ArrayDeque<>();
+        // How much of the path a restart keeps. Zero means a restart discards the whole path.
+        private int baseDepth;
+        // How many entries were seeded rather than extracted, so a report can tell the two apart.
+        private int builtinEntryCount;
         private boolean keepDuplicates;
         private WtemConfig.KeyReuse keyReuse = WtemConfig.KeyReuse.DEFAULT;
+        private WtemConfig.KeyNaming keyNaming = WtemConfig.KeyNaming.DEFAULT;
+        // Shared across copies so a rolled-back transaction does not replay the same draws and
+        // reissue keys that a later entry already took.
+        private Random random = new Random();
 
         private State copy() {
             State copy = new State();
@@ -181,8 +238,12 @@ public final class TranslationContext {
             copy.textToKey.putAll(this.textToKey);
             copy.typeCounts.putAll(this.typeCounts);
             copy.pathStack.addAll(this.pathStack);
+            copy.baseDepth = this.baseDepth;
+            copy.builtinEntryCount = this.builtinEntryCount;
             copy.keepDuplicates = this.keepDuplicates;
             copy.keyReuse = this.keyReuse;
+            copy.keyNaming = this.keyNaming;
+            copy.random = this.random;
             return copy;
         }
     }
@@ -211,19 +272,22 @@ public final class TranslationContext {
 
     public static final class Scope implements AutoCloseable {
         private final List<String> previousPath;
+        private final int previousBaseDepth;
         private boolean closed;
 
-        private Scope(List<String> previousPath) {
+        private Scope(List<String> previousPath, int previousBaseDepth) {
             this.previousPath = previousPath;
+            this.previousBaseDepth = previousBaseDepth;
         }
 
         @Override
         public void close() {
             if (this.closed) return;
             this.closed = true;
-            Deque<String> pathStack = state().pathStack;
-            pathStack.clear();
-            pathStack.addAll(this.previousPath);
+            State state = state();
+            state.pathStack.clear();
+            state.pathStack.addAll(this.previousPath);
+            state.baseDepth = this.previousBaseDepth;
         }
     }
 }

@@ -219,28 +219,21 @@ class BlockEntityWHandlerTest {
     }
 
     @Test
-    void unwrapsTheDoubleNestedBeeEntity() {
-        CompoundTag hive = nbt("""
-                {"id":"minecraft:beehive","bees":[
-                  {"entity_data":{"entity":{"id":"minecraft:bee",
-                     "CustomName":"{\\"text\\":\\"Buzz\\"}"}}}]}
-                """);
+    void readsBeeEntityDataDirectlyForBothHiveTypes() {
+        // BeehiveBlockEntity.Occupant serialises the entity compound straight into 'entity_data',
+        // merging the entity id at the top level. There is no nested 'entity' wrapper here.
+        for (String hiveId : new String[] {"minecraft:beehive", "minecraft:bee_nest"}) {
+            TranslationContext.clear();
+            TranslationContext.setKeepDuplicates(true);
+            CompoundTag hive = nbt("""
+                    {"id":"%s","bees":[
+                      {"entity_data":{"id":"minecraft:bee","CustomName":"{\\"text\\":\\"Buzz\\"}"}}]}
+                    """.formatted(hiveId));
 
-        assertTrue(new BlockEntityWHandler().handle(hive));
+            assertTrue(new BlockEntityWHandler().handle(hive), hiveId);
 
-        assertEquals(Map.of("entity.bee.1.name", "Buzz"), TranslationContext.snapshot());
-    }
-
-    @Test
-    void readsBeeEntityDataStoredWithoutTheExtraEntityWrapper() {
-        CompoundTag nest = nbt("""
-                {"id":"minecraft:bee_nest","bees":[
-                  {"entity_data":{"id":"minecraft:bee","CustomName":"{\\"text\\":\\"Buzz\\"}"}}]}
-                """);
-
-        assertTrue(new BlockEntityWHandler().handle(nest));
-
-        assertEquals(Map.of("entity.bee.1.name", "Buzz"), TranslationContext.snapshot());
+            assertEquals(Map.of("entity.bee.1.name", "Buzz"), TranslationContext.snapshot(), hiveId);
+        }
     }
 
     @Test

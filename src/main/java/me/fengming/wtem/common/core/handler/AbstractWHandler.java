@@ -19,8 +19,20 @@ public abstract class AbstractWHandler<T extends Tag> {
     protected abstract boolean innerHandle(T tag);
 
     public boolean handle(T tag) {
-        try (var transaction = TranslationContext.beginTransaction()) {
-            TranslationContext.setKey(getKey(tag));
+        return handle(tag, true);
+    }
+
+    /**
+     * @param tag a tag to handle.
+     * @param rebuildKey whether the handler restarts the key path instead of extending the caller's.
+     *     Restarting is right for a top-level tag read out of a region file, but loses the context of
+     *     data nested inside an item stack. Extending pins the caller's path, so the nested handler
+     *     and everything it visits build on top of it rather than replacing it.
+     * @return true if the tag has been changed; otherwise, false.
+     */
+    public boolean handle(T tag, boolean rebuildKey) {
+        try (var transaction = TranslationContext.beginTransaction();
+                var ignored = TranslationContext.pushKey(getKey(tag))) {
             boolean changed = innerHandle(tag);
             if (changed) transaction.commit();
             return changed;

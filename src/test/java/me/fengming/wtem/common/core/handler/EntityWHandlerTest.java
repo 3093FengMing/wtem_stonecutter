@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.google.gson.JsonParser;
 import java.util.List;
 import java.util.Map;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.NbtUtils;
 import net.minecraft.SharedConstants;
@@ -182,10 +183,46 @@ class EntityWHandlerTest {
 
     @Test
     void stopsRecursingBeyondTheTraversalDepthLimit() {
-        // The guard allows 32 nested visits. Each passenger consumes one level, so an entity chain
-        // longer than the limit must leave its deepest links untouched instead of overflowing.
+        // Each passenger consumes one level, so an entity chain longer than the limit must leave its
+        // deepest links untouched instead of overflowing the stack.
+        int limit = WtemConfig.DEFAULT_NBT_MAX_DEPTH;
+
+        assertTrue(new EntityWHandler().handle(nbt(passengerChain(limit + 8))));
+
+        Map<String, String> entries = TranslationContext.snapshot();
+        assertTrue(entries.containsValue("Level0"), entries::toString);
+        assertTrue(entries.containsValue("Level" + (limit - 1)), entries::toString);
+        assertFalse(entries.containsValue("Level" + limit), entries::toString);
+        assertEquals(limit, entries.size(), entries::toString);
+    }
+
+    @Test
+    void followsTheConfiguredTraversalDepthLimit() {
+        WtemConfig.initialize(
+                new WtemConfig(
+                        Map.of(),
+                        Map.of(),
+                        WtemConfig.KeyReuse.DEFAULT,
+                        WtemConfig.KeyNaming.DEFAULT,
+                        3,
+                        true,
+                        Map.of(),
+                        WtemConfig.DEFAULT_LANGUAGE_FILE));
+        try {
+            assertTrue(new EntityWHandler().handle(nbt(passengerChain(6))));
+
+            Map<String, String> entries = TranslationContext.snapshot();
+            assertTrue(entries.containsValue("Level2"), entries::toString);
+            assertFalse(entries.containsValue("Level3"), entries::toString);
+            assertEquals(3, entries.size(), entries::toString);
+        } finally {
+            WtemConfig.initialize(WtemConfig.DEFAULT);
+        }
+    }
+
+    /** Builds a chain of {@code depth} named zombies, each riding inside the previous one. */
+    private static String passengerChain(int depth) {
         StringBuilder json = new StringBuilder();
-        int depth = 40;
         for (int i = 0; i < depth; i++) {
             json.append("{\"id\":\"minecraft:zombie\",\"CustomName\":\"{\\\"text\\\":\\\"Level")
                     .append(i)
@@ -193,14 +230,7 @@ class EntityWHandlerTest {
         }
         json.append("{\"id\":\"minecraft:parrot\"}");
         json.append("]}".repeat(depth));
-
-        assertTrue(new EntityWHandler().handle(nbt(json.toString())));
-
-        Map<String, String> entries = TranslationContext.snapshot();
-        assertTrue(entries.containsValue("Level0"), entries::toString);
-        assertTrue(entries.containsValue("Level31"), entries::toString);
-        assertFalse(entries.containsValue("Level32"), entries::toString);
-        assertEquals(32, entries.size(), entries::toString);
+        return json.toString();
     }
 
     /** Extracts one fixture in isolation, so per-type counters start from 1 for each case. */

@@ -1,0 +1,158 @@
+package me.fengming.wtem.common.core.handler.datapack;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.util.ResourceIds;
+import net.minecraft.SharedConstants;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.Bootstrap;
+import net.minecraft.server.packs.resources.IoSupplier;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class SimpleJsonHandlerTest {
+    @TempDir Path directory;
+
+    @BeforeAll
+    static void bootstrapMinecraft() {
+        SharedConstants.tryDetectVersion();
+        Bootstrap.bootStrap();
+    }
+
+    @BeforeEach
+    void setUp() {
+        TranslationContext.clear();
+    }
+
+    @AfterEach
+    void tearDown() {
+        TranslationContext.release();
+    }
+
+    @Test
+    void translatesEveryConfiguredTargetPath() throws IOException {
+        SimpleJsonHandler handler = handler("display.title", "display.description");
+
+        assertTrue(
+                handler.handle(
+                        id("advancement.json"),
+                        source(
+                                """
+                                {"display":{"title":{"text":"Stone Age"},
+                                            "description":{"text":"Mine stone"}}}
+                                """)));
+
+        assertEquals(
+                Map.of(
+                        "datapack.example.advancement.display.title", "Stone Age",
+                        "datapack.example.advancement.display.description", "Mine stone"),
+                TranslationContext.snapshot());
+        JsonObject written = read(id("advancement.json"));
+        assertEquals(
+                "datapack.example.advancement.display.title",
+                written.getAsJsonObject("display")
+                        .getAsJsonObject("title")
+                        .get("translate")
+                        .getAsString());
+    }
+
+    @Test
+    void keysWildcardElementsByTheirIndex() {
+        SimpleJsonHandler handler = handler("body[*].contents");
+
+        assertTrue(
+                handler.handle(
+                        id("dialog.json"),
+                        source(
+                                """
+                                {"body":[{"contents":{"text":"First"}},
+                                         {"contents":{"text":"Second"}}]}
+                                """)));
+
+        assertEquals(
+                Map.of(
+                        "datapack.example.dialog.body.0.contents", "First",
+                        "datapack.example.dialog.body.1.contents", "Second"),
+                TranslationContext.snapshot());
+        assertTrue(Files.exists(this.directory.resolve("dialog.json")));
+    }
+
+    @Test
+    void leavesTheFileAloneWhenNoTargetMatches() {
+        SimpleJsonHandler handler = handler("display.title");
+
+        assertFalse(handler.handle(id("advancement.json"), source("{\"criteria\":{}}")));
+
+        // Nothing was rewritten, so the resource must not be republished into the world directory.
+        assertFalse(Files.exists(this.directory.resolve("advancement.json")));
+        assertEquals(Map.of(), TranslationContext.snapshot());
+    }
+
+    @Test
+    void rejectsAResourceThatIsNotAJsonObject() {
+        SimpleJsonHandler handler = handler("display.title");
+        Identifier rl = id("advancement.json");
+
+        assertThrows(
+                IllegalStateException.class, () -> handler.innerHandle(rl, source("[\"a\"]")));
+    }
+
+    @Test
+    void rejectsAHandlerWithoutTargetPaths() {
+        SimpleJsonHandler handler =
+                new SimpleJsonHandler(
+                        "advancement",
+                        rl -> this.directory.resolve(rl.getPath()),
+                        ResourceHandler.Context.of(null, null, null, null));
+        Identifier rl = id("advancement.json");
+
+        // The factory always supplies targets, so an absent list is a wiring mistake rather than a
+        // resource that happens to have nothing to translate.
+        assertThrows(IllegalStateException.class, () -> handler.innerHandle(rl, source("{}")));
+    }
+
+    @Test
+    void reportsAFailureAsASkippedResource() {
+        SimpleJsonHandler handler = handler("display.title");
+
+        // handle wraps innerHandle, so a malformed resource is skipped instead of aborting the run.
+        assertFalse(handler.handle(id("advancement.json"), source("[\"a\"]")));
+    }
+
+    private SimpleJsonHandler handler(String... targetPaths) {
+        return new SimpleJsonHandler(
+                "advancement",
+                rl -> this.directory.resolve(rl.getPath()),
+                ResourceHandler.Context.of(List.of(targetPaths), null, null, null));
+    }
+
+    private JsonObject read(Identifier rl) throws IOException {
+        return JsonParser.parseString(Files.readString(this.directory.resolve(rl.getPath())))
+                .getAsJsonObject();
+    }
+
+    private static Identifier id(String path) {
+        return ResourceIds.create("example", path);
+    }
+
+    private static IoSupplier<InputStream> source(String contents) {
+        return () -> new ByteArrayInputStream(contents.getBytes(StandardCharsets.UTF_8));
+    }
+}

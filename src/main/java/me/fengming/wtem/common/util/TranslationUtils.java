@@ -195,11 +195,6 @@ public final class TranslationUtils {
         }
     }
 
-    /** Compatibility alias for existing callers. */
-    public static boolean translateNbtString(CompoundTag compound, String path) {
-        return translateNbtComponent(compound, path);
-    }
-
     private static boolean looksLikeSerializedJson(String value) {
         if (value == null) return false;
         String trimmed = value.trim();
@@ -416,7 +411,7 @@ public final class TranslationUtils {
             if (segment.wildcard()) {
                 for (int i = 0; i < array.size(); i++) {
                     PathTransform translated;
-                    try (var element = TranslationContext.push(Integer.toString(i))) {
+                    try (var e = TranslationContext.push(Integer.toString(i))) {
                         translated = translateJsonPath(array.get(i), segments, segmentIndex + 1);
                     }
                     if (!translated.changed()) continue;
@@ -431,7 +426,7 @@ public final class TranslationUtils {
             }
 
             PathTransform translated;
-            try (var element = TranslationContext.push(Integer.toString(segment.index()))) {
+            try (var e = TranslationContext.push(Integer.toString(segment.index()))) {
                 translated = translateJsonPath(array.get(segment.index()), segments, segmentIndex + 1);
             }
             if (translated.changed()) {

@@ -3,6 +3,7 @@ package me.fengming.wtem.common.core;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -66,6 +67,73 @@ class TranslationContextTest {
     }
 
     @Test
+    void drawsRandomKeysThatCarryNoContext() {
+        TranslationContext.setKeepDuplicates(true);
+        TranslationContext.setKeyNaming(
+                new WtemConfig.KeyNaming(WtemConfig.KeyNaming.Scheme.RANDOM, 6));
+        TranslationContext.setKey("entity.zombie.1.name");
+
+        String first = TranslationContext.addEntry("Guard");
+        String second = TranslationContext.addEntry("Sentry");
+
+        assertNotEquals(first, second);
+        for (String key : new String[] {first, second}) {
+            assertTrue(key.startsWith(WtemConfig.KeyNaming.GENERATED_PREFIX), key);
+            assertEquals(WtemConfig.KeyNaming.GENERATED_PREFIX.length() + 6, key.length(), key);
+        }
+        assertEquals(Map.of(first, "Guard", second, "Sentry"), TranslationContext.snapshot());
+    }
+
+    @Test
+    void hashesKeysReproduciblyAcrossRuns() {
+        WtemConfig.KeyNaming hashed =
+                new WtemConfig.KeyNaming(WtemConfig.KeyNaming.Scheme.HASHED, 8);
+        TranslationContext.setKeyNaming(hashed);
+        TranslationContext.setKey("entity.zombie.1.name");
+        String first = TranslationContext.addEntry("Guard");
+
+        TranslationContext.clear();
+        TranslationContext.setKeyNaming(hashed);
+        TranslationContext.setKey("entity.zombie.1.name");
+
+        assertEquals(first, TranslationContext.addEntry("Guard"));
+    }
+
+    @Test
+    void keepsWholeKeysNoMatterHowLongTheyGrow() {
+        // Vanilla places no limit on the length of a translation key, so a key is never shortened:
+        // the extraction path is the only thing that tells a translator where the text came from.
+        String path = "datapack.example." + "nested.".repeat(40) + "name";
+        TranslationContext.setKey(path);
+
+        assertEquals(path, TranslationContext.addEntry("Guard"));
+    }
+
+    @Test
+    void reusesSeededEntriesInsteadOfAllocatingAKey() {
+        TranslationContext.setBuiltinEntries(Map.of("wtem.blank", ""));
+
+        TranslationContext.setKey("sign.1.front_text.0");
+        assertEquals("wtem.blank", TranslationContext.addEntry(""));
+        // The seeded entry is not counted as extracted, and reusing it adds nothing either.
+        assertEquals(0, TranslationContext.extractedEntryCount());
+        assertEquals(Map.of("wtem.blank", ""), TranslationContext.snapshot());
+    }
+
+    @Test
+    void keepsAllocationClearOfSeededKeys() {
+        TranslationContext.setBuiltinEntries(Map.of("sign.1.front_text.0", "Reserved"));
+
+        TranslationContext.setKey("sign.1.front_text.0");
+        String key = TranslationContext.addEntry("Shop");
+
+        assertNotEquals("sign.1.front_text.0", key);
+        assertEquals(1, TranslationContext.extractedEntryCount());
+        assertEquals("Reserved", TranslationContext.snapshot().get("sign.1.front_text.0"));
+        assertEquals("Shop", TranslationContext.snapshot().get(key));
+    }
+
+    @Test
     void advancesTypeCountsFromTheFirstIncrement() {
         assertEquals(1, TranslationContext.getTypeCounts("container.chest"));
 
@@ -84,6 +152,37 @@ class TranslationContextTest {
         }
 
         assertEquals("entity.villager.1", TranslationContext.getKey());
+    }
+
+    @Test
+    void restartsTheWholeKeyByDefault() {
+        TranslationContext.setKey("item.shulker_box.1");
+        try (var ignored = TranslationContext.pushKey("container.shulker_box.1")) {
+            assertEquals("container.shulker_box.1", TranslationContext.getKey());
+        }
+
+        assertEquals("item.shulker_box.1", TranslationContext.getKey());
+    }
+
+    @Test
+    void keepsAPinnedPrefixAcrossARestart() {
+        TranslationContext.setKey("item.shulker_box.1");
+        try (var base = TranslationContext.pinKey()) {
+            try (var ignored = TranslationContext.pushKey("container.shulker_box.1")) {
+                assertEquals(
+                        "item.shulker_box.1.container.shulker_box.1", TranslationContext.getKey());
+
+                // A restart nested inside the pinned scope still stops at the pinned prefix.
+                try (var inner = TranslationContext.pushKey("sign.1")) {
+                    assertEquals("item.shulker_box.1.sign.1", TranslationContext.getKey());
+                }
+            }
+        }
+
+        // Closing the pin restores the unpinned behaviour for the caller that follows.
+        try (var ignored = TranslationContext.pushKey("container.shulker_box.1")) {
+            assertEquals("container.shulker_box.1", TranslationContext.getKey());
+        }
     }
 
     @Test

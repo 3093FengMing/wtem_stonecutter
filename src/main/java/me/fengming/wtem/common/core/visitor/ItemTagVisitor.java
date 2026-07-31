@@ -1,5 +1,7 @@
 package me.fengming.wtem.common.core.visitor;
 
+import me.fengming.wtem.common.Wtem;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.util.ChangeTracker;
@@ -9,6 +11,8 @@ import me.fengming.wtem.common.util.TranslationUtils;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
+
+import java.util.List;
 
 /**
  * Extracts components from item stacks, including item stacks nested in data components.
@@ -97,6 +101,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         }
 
         this.tracker.add(handleBook(components));
+        warnAboutWritableBook(components);
         handleNestedItems(components);
         this.tracker.add(handleNestedData(components));
     }
@@ -117,6 +122,31 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         return tracker.isChanged();
     }
 
+    /**
+     * Reports a book-and-quill whose pages are left untranslated.
+     *
+     * <p>{@code writable_book_content} pages are plain strings rather than components, so they cannot
+     * hold a translatable node. Replacing them would have to bake in one language, which is worse than
+     * leaving them alone, so the content is only reported.
+     */
+    private static void warnAboutWritableBook(CompoundTag components) {
+        String componentName = "minecraft:writable_book_content";
+        if (!components.contains(componentName)) return;
+
+        ListTag pages =
+                NbtUtils.getList(
+                        NbtUtils.getCompound(components, componentName),
+                        "pages",
+                        Tag.TAG_COMPOUND);
+        if (pages.isEmpty()) return;
+
+        Wtem.LOGGER.warn(
+                "Skipping {} pages of a book and quill at {}: its pages are plain text and cannot"
+                        + " hold a translatable component",
+                pages.size(),
+                TranslationContext.getKey());
+    }
+
     private static boolean handleBook(CompoundTag components) {
         String componentName = "minecraft:written_book_content";
         if (!components.contains(componentName)) return false;
@@ -131,9 +161,9 @@ public class ItemTagVisitor implements SimpleTagVisitor {
                 CompoundTag page = NbtUtils.getCompound(pages, i);
                 tracker.add(
                         TranslationUtils.translateNbtComponent(page, "raw", "content.page" + i));
-                tracker.add(
-                        TranslationUtils.translateNbtComponent(
-                                page, "filtered", "content.page" + i + ".filtered"));
+                // almost never used
+                // tracker.add(
+                //        TranslationUtils.translateNbtComponent(page, "filtered", "content.page" + i + ".filtered"));
             }
 
             if (!components.contains("minecraft:custom_name")) {
@@ -173,7 +203,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         }
 
         for (String componentName :
-                new String[] {"minecraft:bundle_contents", "minecraft:charged_projectiles"}) {
+                List.of("minecraft:bundle_contents", "minecraft:charged_projectiles")) {
             ListTag items = NbtUtils.getList(components, componentName, Tag.TAG_COMPOUND);
             for (int i = 0; i < items.size(); i++) {
                 handleItem(NbtUtils.getCompound(items, i));
@@ -186,17 +216,21 @@ public class ItemTagVisitor implements SimpleTagVisitor {
     private static boolean handleNestedData(CompoundTag components) {
         EntityTagVisitor entityVisitor = new EntityTagVisitor();
         for (String componentName :
-                new String[] {"minecraft:entity_data", "minecraft:bucket_entity_data"}) {
+                List.of("minecraft:entity_data", "minecraft:bucket_entity_data")) {
             CompoundTag entity = NbtUtils.getCompound(components, componentName);
             if (!entity.isEmpty()) entity.accept(entityVisitor);
         }
 
         CompoundTag blockEntity = NbtUtils.getCompound(components, "minecraft:block_entity_data");
         boolean changed =
-                !blockEntity.isEmpty() && new BlockEntityWHandler().handle(blockEntity);
+                !blockEntity.isEmpty()
+                        && new BlockEntityWHandler()
+                                .handle(blockEntity, WtemConfig.active().rebuildNestedKeys());
 
         ListTag bees = NbtUtils.getList(components, "minecraft:bees", Tag.TAG_COMPOUND);
         for (int i = 0; i < bees.size(); i++) {
+            // Occupant#entity_data stores the entity compound directly, so there is no nested
+            // 'entity' wrapper here, unlike SpawnData.
             CompoundTag entityData = NbtUtils.getCompound(NbtUtils.getCompound(bees, i), "entity_data");
             if (!entityData.isEmpty()) entityData.accept(entityVisitor);
         }

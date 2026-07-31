@@ -19,6 +19,8 @@ public final class Wtem implements ClientModInitializer {
     public void onInitializeClient() {
         ResourceHandlers.initialize(DefaultResourceHandlers.create());
         WtemConfig.initialize(
-                WtemConfig.loadOrCreate(FabricLoader.getInstance().getConfigDir()));
+                WtemConfig.loadOrCreate(
+                        FabricLoader.getInstance().getConfigDir(),
+                        ResourceHandlers.directories()));
     }
 }

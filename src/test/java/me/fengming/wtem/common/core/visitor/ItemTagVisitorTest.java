@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.google.gson.JsonParser;
 import java.util.List;
 import java.util.Map;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.NbtUtils;
 import net.minecraft.SharedConstants;
@@ -103,7 +104,9 @@ class ItemTagVisitorTest {
     }
 
     @Test
-    void translatesBothRawAndFilteredBookPages() {
+    void translatesRawBookPagesAndLeavesFilteredOnesAlone() {
+        // The filtered variant only exists on servers that enable chat filtering, and a translated
+        // page would defeat the filter, so it is deliberately left untouched.
         Map<String, String> entries =
                 visit(
                         """
@@ -118,9 +121,23 @@ class ItemTagVisitorTest {
         assertEquals(
                 Map.of(
                         "item.written_book.1.name", "Diary",
-                        "book.1.content.page0", "P0",
-                        "book.1.content.page0.filtered", "P0f"),
+                        "book.1.content.page0", "P0"),
                 entries);
+    }
+
+    @Test
+    void leavesBookAndQuillPagesUntranslated() {
+        // writable_book_content pages are plain strings, so they cannot carry a translatable node.
+        CompoundTag item = nbt("""
+                {"id":"minecraft:writable_book","components":{
+                  "minecraft:writable_book_content":{"pages":[{"raw":"Notes"}]}}}
+                """);
+        ItemTagVisitor visitor = new ItemTagVisitor();
+
+        item.accept(visitor);
+
+        assertFalse(visitor.isChanged());
+        assertEquals(Map.of(), TranslationContext.snapshot());
     }
 
     @Test
@@ -227,6 +244,47 @@ class ItemTagVisitorTest {
                           {"entity_data":{"id":"minecraft:bee",
                             "CustomName":"{\\"text\\":\\"Buzz\\"}"}}]}}
                         """));
+    }
+
+    @Test
+    void rebuildsTheKeyOfANestedBlockEntityByDefault() {
+        // A shulker box in a chest names itself from scratch, so the same box produces the same key
+        // no matter where it was found.
+        assertEquals(
+                Map.of("container.shulker_box.1.name", "Loot"),
+                visit(
+                        """
+                        {"id":"minecraft:shulker_box","components":{
+                          "minecraft:block_entity_data":{"id":"minecraft:shulker_box",
+                            "CustomName":"{\\"text\\":\\"Loot\\"}"}}}
+                        """));
+    }
+
+    @Test
+    void extendsTheItemKeyForANestedBlockEntityWhenConfigured() {
+        WtemConfig.initialize(
+                new WtemConfig(
+                        Map.of(),
+                        Map.of(),
+                        WtemConfig.KeyReuse.DEFAULT,
+                        WtemConfig.KeyNaming.DEFAULT,
+                        WtemConfig.DEFAULT_NBT_MAX_DEPTH,
+                        false,
+                        Map.of(),
+                        WtemConfig.DEFAULT_LANGUAGE_FILE));
+        try {
+            assertEquals(
+                    Map.of(
+                            "item.shulker_box.1.container.shulker_box.1.name", "Loot"),
+                    visit(
+                            """
+                            {"id":"minecraft:shulker_box","components":{
+                              "minecraft:block_entity_data":{"id":"minecraft:shulker_box",
+                                "CustomName":"{\\"text\\":\\"Loot\\"}"}}}
+                            """));
+        } finally {
+            WtemConfig.initialize(WtemConfig.DEFAULT);
+        }
     }
 
     @Test

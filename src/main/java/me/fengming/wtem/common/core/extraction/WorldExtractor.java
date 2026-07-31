@@ -148,14 +148,6 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         return this.session.status();
     }
 
-    public Throwable getFailure() {
-        return this.session.fatalFailure();
-    }
-
-    public ExtractionDiagnostics getDiagnostics() {
-        return this.session.diagnostics();
-    }
-
     public ExtractionReport getReport() {
         return this.session.report();
     }
@@ -377,7 +369,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         ChangeTracker tracker = new ChangeTracker();
         for (String key : NbtUtils.getKeys(bossBarTag)) {
             tracker.add(
-                    TranslationUtils.translateNbtString(
+                    TranslationUtils.translateNbtComponent(
                             NbtUtils.getCompound(bossBarTag, key), "Name"));
         }
         if (!tracker.isChanged()) return;
@@ -532,6 +524,8 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     private void beginRun() {
         TranslationContext.clear();
         TranslationContext.setKeyReuse(this.config.keyReuse());
+        TranslationContext.setKeyNaming(this.config.keyNaming());
+        TranslationContext.setBuiltinEntries(this.config.builtinEntries());
     }
 
     private boolean shouldStop() {
@@ -539,7 +533,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     }
 
     private void finishRun() {
-        this.session.setTranslatedEntries(TranslationContext.snapshot().size());
+        this.session.setTranslatedEntries(TranslationContext.extractedEntryCount());
         if (shouldStop()) {
             publishPartialLanguage();
             this.session.completeCancellation();
@@ -553,7 +547,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     }
 
     private void handleFatalFailure(Throwable throwable) {
-        this.session.setTranslatedEntries(TranslationContext.snapshot().size());
+        this.session.setTranslatedEntries(TranslationContext.extractedEntryCount());
         this.session.fail(throwable);
         publishPartialLanguage();
         logDiagnostics();
@@ -571,7 +565,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     }
 
     private void publishPartialLanguage() {
-        if (TranslationContext.snapshot().isEmpty()) return;
+        if (TranslationContext.extractedEntryCount() == 0) return;
         try {
             exportLanguage(languageOutput());
         } catch (RuntimeException exception) {

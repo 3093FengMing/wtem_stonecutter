@@ -79,10 +79,10 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
                                 ListTag bees = NbtUtils.getList(tag, "bees", Tag.TAG_COMPOUND);
                                 for (int i = 0; i < bees.size(); ++i) {
                                     CompoundTag bee = NbtUtils.getCompound(bees, i);
-                                    CompoundTag entityData = NbtUtils.getCompound(bee, "entity_data");
-                                    CompoundTag nestedEntity = NbtUtils.getCompound(entityData, "entity");
-                                    if (!nestedEntity.isEmpty()) entityData = nestedEntity;
-                                    entityData.accept(entityVisitor);
+                                    // Occupant#entity_data stores the entity compound directly, with
+                                    // the entity id merged in at the top level. Unlike SpawnData
+                                    // there is no nested 'entity' wrapper to unwrap.
+                                    NbtUtils.getCompound(bee, "entity_data").accept(entityVisitor);
                                 }
                                 tracker.add(entityVisitor.isChanged());
                             };

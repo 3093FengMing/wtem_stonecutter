@@ -21,8 +21,4 @@ public record ExtractionReport(
     public ExtractionReport {
         failures = List.copyOf(failures);
     }
-
-    public boolean hasWarnings() {
-        return !failures.isEmpty();
-    }
 }

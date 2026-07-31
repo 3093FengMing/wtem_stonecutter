@@ -5,23 +5,34 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
+import java.util.function.Function;
+import java.util.stream.Stream;
 import me.fengming.wtem.common.Wtem;
 import me.fengming.wtem.common.util.ResourceIo;
 
 /**
  * User-facing extraction settings, read from a JSON file next to the other mod configuration.
  *
- * <p>Every setting is optional. An absent setting keeps the built-in behaviour, so a partial file
+ * <p>Every setting is optional. An absent setting keeps the built-in behavior, so a partial file
  * stays valid and a file written by an older version of the mod keeps working. A malformed file is
  * reported and ignored rather than aborting extraction, because losing the ability to extract is a
- * worse outcome than losing a customisation.
+ * worse outcome than losing a customization.
  *
  * @param stages which extraction stages run
  * @param resources which data-pack resource kinds are processed, keyed by registry directory name
  * @param keyReuse when an existing translation key is reused instead of a fresh one being allocated
+ * @param keyNaming how generated translation keys are spelled
+ * @param nbtMaxDepth how deep nested item, entity, and block-entity data is followed
+ * @param rebuildNestedKeys whether data nested inside an item restarts its key instead of extending
+ *     the key of the item that carries it
+ * @param builtinEntries entries the catalog starts with, which extracted text reuses instead of
+ *     allocating a key of its own
  * @param languageFile name of the catalog written to the world directory
  * @author FengMing
  */
@@ -29,18 +40,58 @@ public record WtemConfig(
         Map<Stage, Boolean> stages,
         Map<String, Boolean> resources,
         KeyReuse keyReuse,
+        KeyNaming keyNaming,
+        int nbtMaxDepth,
+        boolean rebuildNestedKeys,
+        Map<String, String> builtinEntries,
         String languageFile) {
 
     public static final String FILE_NAME = "wtem.json";
     public static final String DEFAULT_LANGUAGE_FILE = "en_us.json";
+    public static final int DEFAULT_NBT_MAX_DEPTH = 32;
+
+    /**
+     * Entries every catalog starts with.
+     *
+     * <p>A world is full of text that carries no meaning to translate: an empty sign line, a single
+     * digit on a scoreboard. Without a shared entry each occurrence would take a key of its own and
+     * bury the text that does need translating. Seeding the catalog gives that text one key up front,
+     * so it costs one line no matter how often it appears.
+     */
+    public static final Map<String, String> DEFAULT_BUILTIN_ENTRIES = defaultBuiltinEntries();
+
     public static final WtemConfig DEFAULT =
-            new WtemConfig(Map.of(), Map.of(), KeyReuse.DEFAULT, DEFAULT_LANGUAGE_FILE);
+            new WtemConfig(
+                    Map.of(),
+                    Map.of(),
+                    KeyReuse.DEFAULT,
+                    KeyNaming.DEFAULT,
+                    DEFAULT_NBT_MAX_DEPTH,
+                    true,
+                    DEFAULT_BUILTIN_ENTRIES,
+                    DEFAULT_LANGUAGE_FILE);
 
     private static volatile WtemConfig active = DEFAULT;
 
     public WtemConfig {
         stages = Map.copyOf(stages);
-        resources = Map.copyOf(resources);
+        // Insertion order is kept for the string-keyed maps: it decides the order of the generated
+        // file, and for the built-in entries it also decides which key wins when two share a value.
+        resources = ordered(resources);
+        builtinEntries = ordered(builtinEntries);
+        // A non-positive limit would stop traversal before the outermost tag is read, which silently
+        // extracts nothing at all. Treat it the same way as a malformed value.
+        if (nbtMaxDepth < 1) nbtMaxDepth = DEFAULT_NBT_MAX_DEPTH;
+    }
+
+    private static Map<String, String> defaultBuiltinEntries() {
+        Map<String, String> entries = new LinkedHashMap<>();
+        entries.put(KeyNaming.GENERATED_PREFIX + "blank", "");
+        entries.put(KeyNaming.GENERATED_PREFIX + "space", " ");
+        for (int digit = 0; digit <= 9; digit++) {
+            entries.put(KeyNaming.GENERATED_PREFIX + digit, String.valueOf(digit));
+        }
+        return Collections.unmodifiableMap(entries);
     }
 
     /** The extraction stages that can be switched off independently. */
@@ -74,14 +125,15 @@ public record WtemConfig(
     /**
      * Reads the configuration from {@code directory}, writing a default file when none exists.
      *
-     * <p>The generated file documents the available settings by listing them, which is the only way a
-     * user can discover them without reading the source.
+     * <p>The generated file spells out every setting at its default value, which is the only way a
+     * user can discover what may be changed without reading the source. {@code resourceDirectories}
+     * supplies the resource kinds to list, because which handlers exist is not known here.
      */
-    public static WtemConfig loadOrCreate(Path directory) {
+    public static WtemConfig loadOrCreate(Path directory, Collection<String> resourceDirectories) {
         Path file = directory.resolve(FILE_NAME);
         if (!Files.exists(file)) {
             try {
-                ResourceIo.writeJson(file, DEFAULT.toJson());
+                ResourceIo.writeJson(file, DEFAULT.toJson(resourceDirectories));
             } catch (RuntimeException exception) {
                 Wtem.LOGGER.warn("Failed to write the default WTEM configuration", exception);
             }
@@ -119,22 +171,43 @@ public record WtemConfig(
                 stages,
                 resources,
                 KeyReuse.fromJson(object(json, "key_reuse")),
+                KeyNaming.fromJson(object(json, "key_naming")),
+                readInt(json, "nbt_max_depth").orElse(DEFAULT_NBT_MAX_DEPTH),
+                readBoolean(json, "rebuild_nested_keys").orElse(DEFAULT.rebuildNestedKeys()),
+                builtinEntries(json),
                 languageFile(json));
     }
 
-    public JsonObject toJson() {
+    /**
+     * Writes the settings out, listing {@code resourceDirectories} whether or not they were
+     * configured.
+     *
+     * <p>A resource kind absent from the file is enabled, so writing only the configured ones would
+     * produce a file that hides most of what it controls.
+     */
+    public JsonObject toJson(Collection<String> resourceDirectories) {
         JsonObject stageJson = new JsonObject();
         for (Stage stage : Stage.values()) {
             stageJson.addProperty(stage.id(), isEnabled(stage));
         }
 
         JsonObject resourceJson = new JsonObject();
+        for (String directory : resourceDirectories) {
+            resourceJson.addProperty(directory, isResourceEnabled(directory));
+        }
         this.resources.forEach(resourceJson::addProperty);
+
+        JsonObject builtinJson = new JsonObject();
+        this.builtinEntries.forEach(builtinJson::addProperty);
 
         JsonObject json = new JsonObject();
         json.add("stages", stageJson);
         json.add("resources", resourceJson);
         json.add("key_reuse", this.keyReuse.toJson());
+        json.add("key_naming", this.keyNaming.toJson());
+        json.addProperty("nbt_max_depth", this.nbtMaxDepth);
+        json.addProperty("rebuild_nested_keys", this.rebuildNestedKeys);
+        json.add("builtin_entries", builtinJson);
         json.addProperty("language_file", this.languageFile);
         return json;
     }
@@ -150,6 +223,33 @@ public record WtemConfig(
      */
     public boolean isResourceEnabled(String directory) {
         return this.resources.getOrDefault(directory, true);
+    }
+
+    /**
+     * Reads the seeded catalog entries.
+     *
+     * <p>An absent section keeps the built-in entries, but an empty one switches them off: a user who
+     * wants nothing seeded has no other way to say so.
+     */
+    private static Map<String, String> builtinEntries(JsonObject json) {
+        JsonElement value = json.get("builtin_entries");
+        if (value == null || !value.isJsonObject()) return DEFAULT_BUILTIN_ENTRIES;
+
+        JsonObject entryJson = value.getAsJsonObject();
+        Map<String, String> entries = new LinkedHashMap<>();
+        for (String key : entryJson.keySet()) {
+            JsonElement text = entryJson.get(key);
+            if (text == null || !text.isJsonPrimitive()) {
+                Wtem.LOGGER.warn("Ignoring builtin entry {}: expected a string", key);
+                continue;
+            }
+            entries.put(key, text.getAsString());
+        }
+        return entries;
+    }
+
+    private static <V> Map<String, V> ordered(Map<String, V> values) {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(values));
     }
 
     private static String languageFile(JsonObject json) {
@@ -182,6 +282,35 @@ public record WtemConfig(
             return Optional.empty();
         }
         return Optional.of(primitive.getAsBoolean());
+    }
+
+    private static Optional<Integer> readInt(JsonObject json, String name) {
+        JsonElement value = json.get(name);
+        if (value == null || !value.isJsonPrimitive()) return Optional.empty();
+
+        JsonPrimitive primitive = value.getAsJsonPrimitive();
+        if (!primitive.isNumber()) {
+            Wtem.LOGGER.warn("Ignoring {}: expected a number but found {}", name, primitive);
+            return Optional.empty();
+        }
+        return Optional.of(primitive.getAsInt());
+    }
+
+    private static <E extends Enum<E>> Optional<E> readEnum(
+            JsonObject json, String name, E[] values, Function<E, String> id) {
+        JsonElement value = json.get(name);
+        if (value == null || !value.isJsonPrimitive()) return Optional.empty();
+
+        String text = value.getAsString();
+        for (E candidate : values) {
+            if (id.apply(candidate).equals(text)) return Optional.of(candidate);
+        }
+        Wtem.LOGGER.warn(
+                "Ignoring {} {}: expected one of {}",
+                name,
+                text,
+                Stream.of(values).map(id).toList());
+        return Optional.empty();
     }
 
     /**
@@ -232,6 +361,97 @@ public record WtemConfig(
                 if (longest == null || prefix.length() > longest.length()) longest = prefix;
             }
             return longest == null ? this.byDefault : this.overrides.get(longest);
+        }
+    }
+
+    /**
+     * Decides how a generated translation key is spelled.
+     *
+     * <p>The default keys describe where the text came from, which is what a translator needs in order
+     * to know the context. That makes them long, and a resource pack that has to round-trip its keys
+     * through a spreadsheet or a translation platform may prefer opaque short ones instead.
+     *
+     * @param scheme how the key text is derived
+     * @param randomLength how many letters a {@link Scheme#RANDOM} key uses
+     */
+    public record KeyNaming(Scheme scheme, int randomLength) {
+        /**
+         * Prefix for keys that no longer describe their source.
+         *
+         * <p>A key such as {@code entity.zombie.1.name} cannot collide with a vanilla key, because the
+         * generated index is part of it. A bare random or hashed key has no such protection, so it is
+         * namespaced instead.
+         */
+        public static final String GENERATED_PREFIX = "wtem.";
+
+        public static final int DEFAULT_RANDOM_LENGTH = 8;
+
+        public static final KeyNaming DEFAULT =
+                new KeyNaming(Scheme.STRUCTURED, DEFAULT_RANDOM_LENGTH);
+
+        private static final char[] ALPHABET = "abcdefghijklmnopqrstuvwxyz".toCharArray();
+        private static final int HASH_LENGTH = 6;
+
+        public KeyNaming {
+            if (randomLength < 1) randomLength = DEFAULT_RANDOM_LENGTH;
+        }
+
+        /** How the key text is derived. */
+        public enum Scheme {
+            /** Describes the extraction path, for example {@code entity.zombie.1.name}. */
+            STRUCTURED("structured"),
+            /** Random letters, which keeps keys short but loses all context. */
+            RANDOM("random"),
+            /** A stable digest of the extraction path, short but reproducible across runs. */
+            HASHED("hashed");
+
+            private final String id;
+
+            Scheme(String id) {
+                this.id = id;
+            }
+
+            public String id() {
+                return this.id;
+            }
+        }
+
+        static KeyNaming fromJson(JsonObject json) {
+            return new KeyNaming(
+                    readEnum(json, "scheme", Scheme.values(), Scheme::id).orElse(DEFAULT.scheme()),
+                    readInt(json, "random_length").orElse(DEFAULT.randomLength()));
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            json.addProperty("scheme", this.scheme.id());
+            json.addProperty("random_length", this.randomLength);
+            return json;
+        }
+
+        /** Converts an extraction path into the base key, before uniqueness suffixes are added. */
+        public String baseKey(String path) {
+            return this.scheme == Scheme.HASHED ? GENERATED_PREFIX + hash(path) : path;
+        }
+
+        /** Produces one candidate {@link Scheme#RANDOM} key of {@code length} letters. */
+        public static String randomKey(Random random, int length) {
+            StringBuilder key = new StringBuilder(GENERATED_PREFIX);
+            for (int i = 0; i < length; i++) {
+                key.append(ALPHABET[random.nextInt(ALPHABET.length)]);
+            }
+            return key.toString();
+        }
+
+        /** A short, stable digest. FNV-1a is used because the value never leaves the catalog. */
+        private static String hash(String value) {
+            long h = 0xcbf29ce484222325L;
+            for (int i = 0; i < value.length(); i++) {
+                h ^= value.charAt(i);
+                h *= 0x100000001b3L;
+            }
+            String hex = Long.toHexString(h);
+            return hex.length() <= HASH_LENGTH ? hex : hex.substring(hex.length() - HASH_LENGTH);
         }
     }
 }
