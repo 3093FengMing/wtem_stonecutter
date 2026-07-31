@@ -10,8 +10,9 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 
-/** Version-independent, type-safe access to NBT values.
- * @author FengMing*/
+/**
+ * @author FengMing
+ */
 public final class NbtUtils {
     private NbtUtils() {}
 

@@ -22,7 +22,8 @@ public class EntityWHandler extends AbstractWHandler<CompoundTag> {
 
     @Override
     protected boolean innerHandle(CompoundTag tag) {
-        tag.accept(new EntityTagVisitor());
-        return true;
+        EntityTagVisitor visitor = new EntityTagVisitor();
+        tag.accept(visitor);
+        return visitor.isChanged();
     }
 }

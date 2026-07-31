@@ -16,8 +16,6 @@ stonecutter parameters {
             replace("ResourceLocation", "Identifier")
         }
 
-        // NBT primitive accessors were renamed in 1.21.11. The identifier keeps
-        // these otherwise broad method replacements scoped to NbtUtils.java.
         string(current.parsed >= "1.21.11", "nbt_api") {
             replace(".getAsString()", ".value()")
             replace(".getAllKeys()", ".keySet()")

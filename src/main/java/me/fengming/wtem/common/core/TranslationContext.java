@@ -13,32 +13,26 @@ import java.util.Map;
  * @author FengMing
  */
 public final class TranslationContext {
-    private static final Map<String, Integer> KEY_COUNTS = new LinkedHashMap<>();
-    private static final Map<String, String> LANGUAGE_ENTRIES = new LinkedHashMap<>();
-    private static final Map<String, String> TEXT_TO_KEY = new LinkedHashMap<>();
-    private static final Map<String, Integer> TYPE_COUNTS = new LinkedHashMap<>();
-    private static final Deque<String> PATH_STACK = new ArrayDeque<>();
+    private static final ThreadLocal<State> STATE = ThreadLocal.withInitial(State::new);
     private static final GsonBuilder LANGUAGE_GSON =
             new GsonBuilder().setPrettyPrinting().disableHtmlEscaping();
-
-    private static boolean keepDuplicates;
 
     private TranslationContext() {}
 
     public static void clear() {
-        KEY_COUNTS.clear();
-        LANGUAGE_ENTRIES.clear();
-        TEXT_TO_KEY.clear();
-        TYPE_COUNTS.clear();
-        PATH_STACK.clear();
+        STATE.set(new State());
+    }
+
+    public static void release() {
+        STATE.remove();
     }
 
     public static int getTypeCounts(String type) {
-        return TYPE_COUNTS.getOrDefault(type, 1);
+        return state().typeCounts.getOrDefault(type, 1);
     }
 
     public static void increaseTypeCounts(String type) {
-        TYPE_COUNTS.merge(type, 1, Integer::sum);
+        state().typeCounts.merge(type, 1, Integer::sum);
     }
 
     public static int nextTypeCount(String type) {
@@ -48,12 +42,12 @@ public final class TranslationContext {
     }
 
     public static void setKey(String key) {
-        PATH_STACK.clear();
+        state().pathStack.clear();
         append(key);
     }
 
     public static String getKey() {
-        return allocateKey(currentPath());
+        return currentPath();
     }
 
     /**
@@ -64,89 +58,103 @@ public final class TranslationContext {
      * duplicate entries have explicitly been enabled.
      */
     public static String addEntry(String value) {
-        if (!keepDuplicates) {
-            String existing = TEXT_TO_KEY.get(value);
+        State state = state();
+        if (!state.keepDuplicates) {
+            String existing = state.textToKey.get(value);
             if (existing != null) return existing;
         }
 
         String key = allocateKey(currentPath());
-        LANGUAGE_ENTRIES.put(key, value);
-        if (!keepDuplicates) TEXT_TO_KEY.put(value, key);
+        state.languageEntries.put(key, value);
+        if (!state.keepDuplicates) state.textToKey.put(value, key);
         return key;
     }
 
     /** Compatibility entry point for callers that already have a base key. */
     public static String addKey(String key, String value) {
-        if (!keepDuplicates) {
-            String existing = TEXT_TO_KEY.get(value);
+        State state = state();
+        if (!state.keepDuplicates) {
+            String existing = state.textToKey.get(value);
             if (existing != null) return existing;
         }
 
         String actualKey = uniqueKey(key);
-        LANGUAGE_ENTRIES.put(actualKey, value);
-        if (!keepDuplicates) TEXT_TO_KEY.put(value, actualKey);
+        state.languageEntries.put(actualKey, value);
+        if (!state.keepDuplicates) state.textToKey.put(value, actualKey);
         return actualKey;
     }
 
     public static String exportLanguage() {
-        return LANGUAGE_GSON.create().toJson(LANGUAGE_ENTRIES);
+        return LANGUAGE_GSON.create().toJson(state().languageEntries);
     }
 
     public static Map<String, String> snapshot() {
-        return Collections.unmodifiableMap(new LinkedHashMap<>(LANGUAGE_ENTRIES));
+        return Collections.unmodifiableMap(new LinkedHashMap<>(state().languageEntries));
     }
 
     public static void setKeepDuplicates(boolean keepDuplicates) {
-        TranslationContext.keepDuplicates = keepDuplicates;
+        state().keepDuplicates = keepDuplicates;
     }
 
     public static boolean isKeepingDuplicates() {
-        return keepDuplicates;
-    }
-
-    public static void revertAndAppend(String id) {
-        revert();
-        append(id);
+        return state().keepDuplicates;
     }
 
     public static void revert() {
-        if (PATH_STACK.size() > 1) PATH_STACK.removeLast();
+        Deque<String> pathStack = state().pathStack;
+        if (pathStack.size() > 1) pathStack.removeLast();
     }
 
     public static void append(String path) {
         if (path == null || path.isBlank()) return;
-        PATH_STACK.addLast(path);
+        state().pathStack.addLast(path);
     }
 
     public static Scope push(String path) {
-        List<String> previous = new ArrayList<>(PATH_STACK);
+        List<String> previous = new ArrayList<>(state().pathStack);
         append(path);
         return new Scope(previous);
     }
 
     public static Scope pushKey(String key) {
-        List<String> previous = new ArrayList<>(PATH_STACK);
+        List<String> previous = new ArrayList<>(state().pathStack);
         setKey(key);
         return new Scope(previous);
     }
 
     private static String currentPath() {
-        if (PATH_STACK.isEmpty()) return "no_key";
-        return String.join(".", PATH_STACK);
+        Deque<String> pathStack = state().pathStack;
+        if (pathStack.isEmpty()) return "no_key";
+        return String.join(".", pathStack);
     }
 
     private static String allocateKey(String baseKey) {
-        int count = KEY_COUNTS.getOrDefault(baseKey, 0);
-        KEY_COUNTS.put(baseKey, count + 1);
+        Map<String, Integer> keyCounts = state().keyCounts;
+        int count = keyCounts.getOrDefault(baseKey, 0);
+        keyCounts.put(baseKey, count + 1);
         return count == 0 ? baseKey : baseKey + "." + count;
     }
 
     private static String uniqueKey(String baseKey) {
-        if (!LANGUAGE_ENTRIES.containsKey(baseKey)) {
-            KEY_COUNTS.putIfAbsent(baseKey, 1);
+        State state = state();
+        if (!state.languageEntries.containsKey(baseKey)) {
+            state.keyCounts.putIfAbsent(baseKey, 1);
             return baseKey;
         }
         return allocateKey(baseKey);
+    }
+
+    private static State state() {
+        return STATE.get();
+    }
+
+    private static final class State {
+        private final Map<String, Integer> keyCounts = new LinkedHashMap<>();
+        private final Map<String, String> languageEntries = new LinkedHashMap<>();
+        private final Map<String, String> textToKey = new LinkedHashMap<>();
+        private final Map<String, Integer> typeCounts = new LinkedHashMap<>();
+        private final Deque<String> pathStack = new ArrayDeque<>();
+        private boolean keepDuplicates;
     }
 
     public static final class Scope implements AutoCloseable {
@@ -161,8 +169,9 @@ public final class TranslationContext {
         public void close() {
             if (this.closed) return;
             this.closed = true;
-            PATH_STACK.clear();
-            PATH_STACK.addAll(this.previousPath);
+            Deque<String> pathStack = state().pathStack;
+            pathStack.clear();
+            pathStack.addAll(this.previousPath);
         }
     }
 }

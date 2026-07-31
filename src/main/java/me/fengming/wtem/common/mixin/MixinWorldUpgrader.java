@@ -1,5 +1,6 @@
 package me.fengming.wtem.common.mixin;
 
+import me.fengming.wtem.common.core.WorldExtractor;
 import net.minecraft.util.worldupdate.WorldUpgrader;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -11,5 +12,8 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 @Mixin(WorldUpgrader.class)
 public class MixinWorldUpgrader {
     @Redirect(method = "<init>", at = @At(value = "INVOKE", target = "Ljava/lang/Thread;start()V"))
-    void threadStart(Thread instance) {}
+    private void wtem$startThread(Thread thread) {
+        if ((Object) this instanceof WorldExtractor) return;
+        thread.start();
+    }
 }

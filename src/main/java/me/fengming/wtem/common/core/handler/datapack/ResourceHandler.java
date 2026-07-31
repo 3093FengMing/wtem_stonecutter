@@ -7,6 +7,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Function;
 import me.fengming.wtem.common.core.TranslationContext;
+import me.fengming.wtem.common.Wtem;
+import me.fengming.wtem.common.core.ExtractionDiagnostics;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.IoSupplier;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
@@ -44,24 +46,31 @@ public abstract class ResourceHandler {
         String s = rl.getNamespace() + "." + p;
         s = s.replace("/", ".");
         TranslationContext.setKey("datapack." + s);
-        innerHandle(rl, supplier);
+        try {
+            innerHandle(rl, supplier);
+        } catch (RuntimeException exception) {
+            Wtem.LOGGER.error("Failed to process data-pack resource {}", rl, exception);
+            if (this.context != null && this.context.diagnostics() != null) {
+                this.context.diagnostics().record("datapack", rl.toString(), exception);
+            }
+        }
     }
 
     protected abstract void innerHandle(Identifier rl, IoSupplier<InputStream> supplier);
 
     public record Context(
-            @Nullable List<String> list, @Nullable StructureTemplateManager structureManager) {
-        public static Context of(List<String> targetPaths, StructureTemplateManager structureManager) {
-            return new Context(targetPaths, structureManager);
+            @Nullable List<String> list,
+            @Nullable StructureTemplateManager structureManager,
+            @Nullable ExtractionDiagnostics diagnostics) {
+        public static Context of(
+                List<String> targetPaths,
+                StructureTemplateManager structureManager,
+                ExtractionDiagnostics diagnostics) {
+            return new Context(targetPaths, structureManager, diagnostics);
         }
 
-        public Context set(List<String> list, StructureTemplateManager structureManager) {
-            if (this.list == null && this.structureManager == null)
-                return new Context(list, structureManager);
-            if (this.list != null && this.structureManager == null)
-                return new Context(this.list, structureManager);
-            if (this.list == null) return new Context(list, this.structureManager);
-            return new Context(this.list, this.structureManager);
+        public Context withTargets(List<String> targets) {
+            return new Context(List.copyOf(targets), this.structureManager, this.diagnostics);
         }
     }
 }

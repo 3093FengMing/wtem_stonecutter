@@ -15,6 +15,12 @@ import net.minecraft.nbt.Tag;
  * @author FengMing
  */
 public class ItemTagVisitor implements SimpleTagVisitor {
+    private boolean changed;
+
+    public boolean isChanged() {
+        return this.changed;
+    }
+
     @Override
     public void visitCompound(CompoundTag tag) {
         handleItem(tag);
@@ -38,11 +44,11 @@ public class ItemTagVisitor implements SimpleTagVisitor {
 
         try (var traversal = NbtTraversalGuard.enter()) {
             if (!traversal.entered()) return;
-            translateItemText(components);
-            handleAttributeModifiers(components);
-            handleBook(components);
+            this.changed |= translateItemText(components);
+            this.changed |= handleAttributeModifiers(components);
+            this.changed |= handleBook(components);
             handleNestedItems(components);
-            handleNestedData(components);
+            this.changed |= handleNestedData(components);
         }
     }
 
@@ -63,11 +69,12 @@ public class ItemTagVisitor implements SimpleTagVisitor {
             try (var ignored = TranslationContext.pushKey(itemKey)) {
                 boolean translated = translateItemText(components);
                 translated |= handleAttributeModifiers(components);
+                this.changed |= translated;
                 if (translated) TranslationContext.increaseTypeCounts(countType);
 
-                handleBook(components);
+                this.changed |= handleBook(components);
                 handleNestedItems(components);
-                handleNestedData(components);
+                this.changed |= handleNestedData(components);
             }
         }
     }
@@ -88,9 +95,9 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         return translated;
     }
 
-    private static void handleBook(CompoundTag components) {
+    private static boolean handleBook(CompoundTag components) {
         String componentName = "minecraft:written_book_content";
-        if (!components.contains(componentName)) return;
+        if (!components.contains(componentName)) return false;
 
         CompoundTag book = NbtUtils.getCompound(components, componentName);
         int bookIndex = TranslationContext.getTypeCounts("book");
@@ -121,6 +128,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         }
 
         if (translated) TranslationContext.increaseTypeCounts("book");
+        return translated;
     }
 
     private static boolean handleAttributeModifiers(CompoundTag components) {
@@ -154,7 +162,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         handleItem(NbtUtils.getCompound(components, "minecraft:use_remainder"));
     }
 
-    private static void handleNestedData(CompoundTag components) {
+    private static boolean handleNestedData(CompoundTag components) {
         EntityTagVisitor entityVisitor = new EntityTagVisitor();
         for (String componentName :
                 new String[] {"minecraft:entity_data", "minecraft:bucket_entity_data"}) {
@@ -163,12 +171,14 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         }
 
         CompoundTag blockEntity = NbtUtils.getCompound(components, "minecraft:block_entity_data");
-        if (!blockEntity.isEmpty()) new BlockEntityWHandler().handle(blockEntity);
+        boolean changed =
+                !blockEntity.isEmpty() && new BlockEntityWHandler().handle(blockEntity);
 
         ListTag bees = NbtUtils.getList(components, "minecraft:bees", Tag.TAG_COMPOUND);
         for (int i = 0; i < bees.size(); i++) {
             CompoundTag entityData = NbtUtils.getCompound(NbtUtils.getCompound(bees, i), "entity_data");
             if (!entityData.isEmpty()) entityData.accept(entityVisitor);
         }
+        return changed || entityVisitor.isChanged();
     }
 }

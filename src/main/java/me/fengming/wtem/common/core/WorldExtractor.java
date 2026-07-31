@@ -8,11 +8,11 @@ import me.fengming.wtem.common.core.handler.EntityWHandler;
 import me.fengming.wtem.common.core.handler.StructureTemplateWHandler;
 import me.fengming.wtem.common.core.handler.datapack.ResourceHandler;
 import me.fengming.wtem.common.core.handler.datapack.ResourceHandlers;
+import me.fengming.wtem.common.core.handler.datapack.FunctionHandler;
 import me.fengming.wtem.common.core.misc.CustomScoreBoard;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIo;
 import me.fengming.wtem.common.util.TranslationUtils;
-import net.minecraft.client.Minecraft;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
@@ -53,16 +53,34 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.storage.WorldData;
 
 *///?}
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.function.Function;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * @author FengMing
  */
-public class WorldExtractor extends WorldUpgrader {
+public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
+    public enum ExtractionStatus {
+        READY,
+        RUNNING,
+        SUCCEEDED,
+        FAILED,
+        CANCELLED;
+
+        public boolean isTerminal() {
+            return this == SUCCEEDED || this == FAILED || this == CANCELLED;
+        }
+    }
+
+    private final AtomicReference<ExtractionStatus> extractionStatus =
+            new AtomicReference<>(ExtractionStatus.READY);
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+    private volatile Throwable failure;
+
     //? if >=26.1 {
 
     private static final ThreadFactory THREAD_FACTORY = new ThreadFactoryBuilder().setDaemon(true).build();
@@ -84,8 +102,7 @@ public class WorldExtractor extends WorldUpgrader {
     private final RegistryAccess registry;
     private final StructureTemplateManager structureManager;
 
-    public WorldExtractor(Minecraft mc,
-                          DataFixer dataFixer,
+    public WorldExtractor(DataFixer dataFixer,
                           WorldStem worldStem,
                           LevelStorageSource.LevelStorageAccess levelStorage,
                           RegistryAccess registry
@@ -109,11 +126,7 @@ public class WorldExtractor extends WorldUpgrader {
         var dimensions = registry.lookupOrThrow(Registries.LEVEL_STEM);
         this.levels = dimensions.registryKeySet().stream().map(Registries::levelStemToLevel).collect(Collectors.toUnmodifiableSet());
 
-        this.thread = THREAD_FACTORY.newThread(this::work);
-        this.thread.setUncaughtExceptionHandler((t, e) -> {
-            Wtem.LOGGER.error("Error upgrading world", e);
-            this.progress.setFinished(true);
-        });
+        this.thread = THREAD_FACTORY.newThread(this::runExtractionSafely);
 
         //?}
     }
@@ -124,22 +137,76 @@ public class WorldExtractor extends WorldUpgrader {
     }
     //?}
 
-    public void startThread() {
-        this.thread.start();
+    public boolean startThread() {
+        if (!this.extractionStatus.compareAndSet(ExtractionStatus.READY, ExtractionStatus.RUNNING)) {
+            return false;
+        }
+
+        try {
+            this.thread.start();
+            return true;
+        } catch (RuntimeException exception) {
+            this.failure = exception;
+            this.extractionStatus.set(ExtractionStatus.FAILED);
+            close();
+            throw exception;
+        }
+    }
+
+    public ExtractionStatus getExtractionStatus() {
+        return this.extractionStatus.get();
+    }
+
+    public Throwable getFailure() {
+        return this.failure;
+    }
+
+    public ExtractionDiagnostics getDiagnostics() {
+        return this.diagnostics;
+    }
+
+    @Override
+    public void cancel() {
+        ExtractionStatus previous = this.extractionStatus.getAndUpdate(
+                status -> status.isTerminal() ? status : ExtractionStatus.CANCELLED);
+        if (previous.isTerminal()) return;
+
+        //? if >=26.1 {
+        this.progress.setCanceled();
+        if (this.thread.isAlive() && Thread.currentThread() != this.thread) {
+            try {
+                this.thread.join();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        //?} else {
+        /*super.cancel();
+        *///?}
+        if (previous == ExtractionStatus.READY) close();
     }
 
     public void extractDatapacks() {
         final var datapackDir = this.levelStorage.getLevelPath(LevelResource.DATAPACK_DIR);
-        final ResourceHandler.Context context = ResourceHandler.Context.of(null, this.structureManager);
+        final ResourceHandler.Context context =
+                ResourceHandler.Context.of(null, this.structureManager, this.diagnostics);
 
         for (PackResources pack : this.worldStem.resourceManager().listPacks().toList()) {
             String packId = pack.packId();
-            if ("vanilla".equals(packId) || "fabric".equals(packId)) continue;
+            if ("vanilla".equals(packId)
+                    || "fabric".equals(packId)
+                    || packId.endsWith("_wtem")) {
+                continue;
+            }
 
-            int separator = Math.max(packId.lastIndexOf('/'), packId.lastIndexOf('\\'));
-            String outputPackId = separator < 0 ? packId : packId.substring(separator + 1);
-            Path outputRoot = datapackDir.resolve(outputPackId + "_wtem");
-            extractPackMetadata(pack, outputRoot.resolve("pack.mcmeta"), outputPackId);
+            String outputPackId = sanitizePackId(packId) + "_wtem";
+            Path outputRoot = datapackDir.resolve(outputPackId);
+            try {
+                extractPackMetadata(pack, outputRoot.resolve("pack.mcmeta"), outputPackId);
+            } catch (RuntimeException exception) {
+                this.diagnostics.record("pack_metadata", packId, exception);
+                Wtem.LOGGER.error("Failed to process metadata for pack {}", packId, exception);
+            }
 
             Function<Identifier, Path> filePath =
                     rl ->
@@ -149,18 +216,21 @@ public class WorldExtractor extends WorldUpgrader {
                                             + "/"
                                             + rl.getPath());
             for (String namespace : pack.getNamespaces(PackType.SERVER_DATA)) {
-                ResourceHandlers.getStream()
-                        .forEachOrdered(
-                                factory -> {
-                                    var handler = factory.newHandler(filePath, context);
-                                    pack.listResources(
-                                            PackType.SERVER_DATA,
-                                            namespace,
-                                            handler.getPath(),
-                                            handler::handle);
-                                });
+                for (var factory : ResourceHandlers.all()) {
+                    var handler = factory.newHandler(filePath, context);
+                    pack.listResources(
+                            PackType.SERVER_DATA,
+                            namespace,
+                            handler.getPath(),
+                            handler::handle);
+                }
             }
         }
+    }
+
+    private static String sanitizePackId(String packId) {
+        String sanitized = packId.replaceAll("[^A-Za-z0-9._-]", "_");
+        return sanitized.isBlank() ? "pack" : sanitized;
     }
 
     private static void extractPackMetadata(PackResources pack, Path output, String packId) {
@@ -180,28 +250,41 @@ public class WorldExtractor extends WorldUpgrader {
         this.structureManager.listTemplates().forEach(rl -> {
             var optional = this.structureManager.get(rl);
             if (optional.isEmpty()) return;
-            CompoundTag modified = new StructureTemplateWHandler().handle(optional.get());
+            StructureTemplateWHandler.Result result =
+                    new StructureTemplateWHandler().process(optional.get());
+            if (!result.changed()) return;
             //? if >=26.1 {
             Path filePath = templates.createAndValidatePathToStructure(rl);
             //?} else {
             /*Path filePath = this.structureManager.createAndValidatePathToGeneratedStructure(rl, ".nbt");
             *///?}
-            ResourceIo.writeNbt(filePath, modified);
+            ResourceIo.writeNbt(filePath, result.tag());
         });
     }
 
     public void extractBossBar() {
         //? if >=26.1 {
         CustomBossEvents events = this.savedDataStorage.computeIfAbsent(CustomBossEvents.TYPE);
-        events.getEvents().forEach(event ->
-                event.setName(TranslationUtils.translateLiteral(event.getName())));
-        events.setDirty();
+        boolean changed = false;
+        for (var event : events.getEvents()) {
+            var original = event.getName();
+            var translated = TranslationUtils.translateLiteral(original);
+            if (translated == original) continue;
+            event.setName(translated);
+            changed = true;
+        }
+        if (changed) events.setDirty();
         //?} else {
         /*WorldData worldData = this.worldStem.worldData();
         CompoundTag bossBarTag = worldData.getCustomBossEvents();
         if (bossBarTag == null) return;
-        NbtUtils.getKeys(bossBarTag).forEach(key ->
-                TranslationUtils.translateNbtString(NbtUtils.getCompound(bossBarTag, key), "Name"));
+        boolean changed = false;
+        for (String key : NbtUtils.getKeys(bossBarTag)) {
+            changed |=
+                    TranslationUtils.translateNbtString(
+                            NbtUtils.getCompound(bossBarTag, key), "Name");
+        }
+        if (!changed) return;
         worldData.setCustomBossEvents(bossBarTag);
         this.levelStorage.saveDataTag(this.registry, worldData, null);
         *///?}
@@ -211,13 +294,13 @@ public class WorldExtractor extends WorldUpgrader {
         CustomScoreBoard sb = new CustomScoreBoard();
         //? if >=26.1 {
         sb.load(this.savedDataStorage.computeIfAbsent(ScoreboardSaveData.TYPE).getData());
-        sb.extract();
-        this.savedDataStorage.set(ScoreboardSaveData.TYPE, new ScoreboardSaveData(sb.store()));
+        if (sb.extract()) {
+            this.savedDataStorage.set(ScoreboardSaveData.TYPE, new ScoreboardSaveData(sb.store()));
+        }
         //?} else if >=1.21.11 {
         /*ScoreboardSaveData data = this.overworldDataStorage.computeIfAbsent(ScoreboardSaveData.TYPE);
         sb.load(data.getData());
-        sb.extract();
-        data.setData(sb.store());
+        if (sb.extract()) data.setData(sb.store());
         *///?} else {
         /*this.overworldDataStorage.get(sb.dataFactory(), "scoreboard");
         sb.extract();
@@ -225,9 +308,39 @@ public class WorldExtractor extends WorldUpgrader {
     }
 
     //? if >=26.1 {
-    private void work() {
+    private void runExtractionSafely() {
+        TranslationContext.clear();
+        try {
+            runExtraction();
+            if (this.extractionStatus.get() == ExtractionStatus.RUNNING) {
+                exportLanguage(
+                        this.levelStorage
+                                .getLevelPath(LevelResource.ROOT)
+                                .resolve("en_us.json"));
+                this.extractionStatus.compareAndSet(
+                        ExtractionStatus.RUNNING, ExtractionStatus.SUCCEEDED);
+            }
+        } catch (Throwable throwable) {
+            this.failure = throwable;
+            this.extractionStatus.compareAndSet(
+                    ExtractionStatus.RUNNING, ExtractionStatus.FAILED);
+            Wtem.LOGGER.error("Failed to extract world", throwable);
+        } finally {
+            this.progress.setFinished(true);
+            try {
+                close();
+            } finally {
+                FunctionHandler.releaseParser();
+                TranslationContext.release();
+            }
+        }
+    }
+
+    private void runExtraction() {
         work(DataFixTypes.CHUNK, new BlockEntityWHandler(), "region");
+        if (this.extractionStatus.get() == ExtractionStatus.CANCELLED) return;
         work(DataFixTypes.ENTITY_CHUNK, new EntityWHandler(), "entities");
+        if (this.extractionStatus.get() == ExtractionStatus.CANCELLED) return;
 
         extractScoreBoard();
         extractBossBar();
@@ -235,7 +348,6 @@ public class WorldExtractor extends WorldUpgrader {
         extractStructures();
 
         savedDataStorage.saveAndJoin();
-        this.progress.setFinished(true);
     }
 
     private void work(DataFixTypes dataFixType, AbstractWHandler<CompoundTag> handler, String folderName) {
@@ -258,25 +370,52 @@ public class WorldExtractor extends WorldUpgrader {
     /*@Override
     public void work() {
         TranslationContext.clear();
-
-        new ChunkExtractor(new BlockEntityWHandler(), DataFixTypes.CHUNK, "region").upgrade();
-        new ChunkExtractor(new EntityWHandler(), DataFixTypes.ENTITY_CHUNK, "entities").upgrade();
-
-        extractScoreBoard();
-        extractBossBar();
-        extractDatapacks();
-        extractStructures();
-        exportLanguage(this.levelStorage.getLevelPath(LevelResource.ROOT).resolve("en_us.json"));
-
-        this.finished = true;
+        try {
+            new ChunkExtractor(new BlockEntityWHandler(), DataFixTypes.CHUNK, "region").upgrade();
+            if (this.extractionStatus.get() != ExtractionStatus.CANCELLED) {
+                new ChunkExtractor(new EntityWHandler(), DataFixTypes.ENTITY_CHUNK, "entities").upgrade();
+                extractScoreBoard();
+                extractBossBar();
+                extractDatapacks();
+                extractStructures();
+                exportLanguage(this.levelStorage.getLevelPath(LevelResource.ROOT).resolve("en_us.json"));
+                this.extractionStatus.compareAndSet(
+                        ExtractionStatus.RUNNING, ExtractionStatus.SUCCEEDED);
+            }
+        } catch (Throwable throwable) {
+            this.failure = throwable;
+            this.extractionStatus.compareAndSet(
+                    ExtractionStatus.RUNNING, ExtractionStatus.FAILED);
+            Wtem.LOGGER.error("Failed to extract world", throwable);
+        } finally {
+            this.finished = true;
+            try {
+                close();
+            } finally {
+                FunctionHandler.releaseParser();
+                TranslationContext.release();
+            }
+        }
     }
     *///?}
 
     public static void exportLanguage(Path file) {
+        ResourceIo.writeString(file, TranslationContext.exportLanguage());
+    }
+
+    @Override
+    public void close() {
+        if (!this.closed.compareAndSet(false, true)) return;
         try {
-            Files.writeString(file, TranslationContext.exportLanguage());
-        } catch (IOException e) {
-            Wtem.LOGGER.error("Failed to export language file", e);
+            //? if >=26.1 {
+            try {
+                this.savedDataStorage.close();
+            } finally {
+                super.close();
+            }
+            //?}
+        } finally {
+            this.worldStem.close();
         }
     }
 

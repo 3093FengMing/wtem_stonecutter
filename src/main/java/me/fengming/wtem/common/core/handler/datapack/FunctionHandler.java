@@ -34,12 +34,15 @@ import net.minecraft.server.permissions.PermissionSet;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 
-/** Extracts components and NBT literals from commands while preserving every function line. */
+/** Extracts components and NBT literals from commands while preserving every function line.
+ * @author FengMing*/
 public class FunctionHandler extends NonExtraResourceHandler {
     public static final HandlerFactory FACTORY = FunctionHandler::new;
+    private static final ThreadLocal<ParserContext> COMMAND_PARSER =
+            ThreadLocal.withInitial(FunctionHandler::createParserContext);
 
     public FunctionHandler(Function<Identifier, Path> filePath, Context context) {
-        super("function", filePath);
+        super("function", filePath, context);
     }
 
     @Override
@@ -60,11 +63,7 @@ public class FunctionHandler extends NonExtraResourceHandler {
     }
 
     public static String processFunction(List<String> lines) {
-        Commands commands =
-                new Commands(
-                        Commands.CommandSelection.ALL,
-                        Commands.createValidationContext(VanillaRegistries.createLookup()));
-        CommandSourceStack source = createCommandSource();
+        ParserContext parser = COMMAND_PARSER.get();
         List<String> modified = new ArrayList<>();
 
         for (int i = 0; i < lines.size(); i++) {
@@ -82,9 +81,21 @@ public class FunctionHandler extends NonExtraResourceHandler {
                 continue;
             }
 
-            modified.add(processCommand(commands, source, logicalLine));
+            modified.add(processCommand(parser.commands(), parser.source(), logicalLine));
         }
         return String.join("\n", modified);
+    }
+
+    public static void releaseParser() {
+        COMMAND_PARSER.remove();
+    }
+
+    private static ParserContext createParserContext() {
+        Commands commands =
+                new Commands(
+                        Commands.CommandSelection.ALL,
+                        Commands.createValidationContext(VanillaRegistries.createLookup()));
+        return new ParserContext(commands, createCommandSource());
     }
 
     private static CommandSourceStack createCommandSource() {
@@ -96,7 +107,7 @@ public class FunctionHandler extends NonExtraResourceHandler {
                 //? if >=1.21.11 {
                 PermissionSet.ALL_PERMISSIONS,
                 //?} else
-                 //3,
+                //3,
                 "WTEM",
                 CommonComponents.EMPTY,
                 null,
@@ -145,9 +156,13 @@ public class FunctionHandler extends NonExtraResourceHandler {
             if (translated == component) return null;
             replacement = TranslationUtils.translateToJson(translated);
         } else if (value instanceof CompoundTag compound) {
-            compound.accept(new EntityTagVisitor());
-            compound.accept(new ItemTagVisitor());
-            new BlockEntityWHandler().handle(compound);
+            EntityTagVisitor entityVisitor = new EntityTagVisitor();
+            ItemTagVisitor itemVisitor = new ItemTagVisitor();
+            compound.accept(entityVisitor);
+            compound.accept(itemVisitor);
+            boolean changed = new BlockEntityWHandler().handle(compound);
+            changed |= entityVisitor.isChanged() || itemVisitor.isChanged();
+            if (!changed) return null;
             replacement = compound.toString();
         } else {
             return null;
@@ -167,4 +182,6 @@ public class FunctionHandler extends NonExtraResourceHandler {
     }
 
     private record Replacement(int start, int end, String value) {}
+
+    private record ParserContext(Commands commands, CommandSourceStack source) {}
 }

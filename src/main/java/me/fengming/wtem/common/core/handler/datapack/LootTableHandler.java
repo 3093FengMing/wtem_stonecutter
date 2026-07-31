@@ -12,7 +12,8 @@ import me.fengming.wtem.common.util.ResourceIo;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.IoSupplier;
 
-/** Recursively processes loot-table entries and functions without changing the root schema. */
+/** Recursively processes loot-table entries and functions without changing the root schema.
+ * @author FengMing*/
 public class LootTableHandler extends NonExtraResourceHandler {
     private static final Set<String> COMPOSITE_ENTRY_TYPES =
             Set.of("group", "alternatives", "sequence");
@@ -20,7 +21,7 @@ public class LootTableHandler extends NonExtraResourceHandler {
     public static final HandlerFactory FACTORY = LootTableHandler::new;
 
     public LootTableHandler(Function<Identifier, Path> filePath, Context context) {
-        super("loot_table", filePath);
+        super("loot_table", filePath, context);
     }
 
     @Override

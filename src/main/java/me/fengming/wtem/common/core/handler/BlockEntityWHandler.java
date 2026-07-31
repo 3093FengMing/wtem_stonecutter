@@ -18,26 +18,16 @@ import net.minecraft.nbt.TagVisitor;
 /**
  * Extracts translatable data from block entities and recursively visits their stored items and
  * entities.
- *
  * @author FengMing
  */
 public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
     private static final Set<String> CONTAINER_TYPES =
-            Set.of(
-                    "barrel",
-                    "blast_furnace",
-                    "brewing_stand",
-                    "campfire",
-                    "chest",
-                    "chiseled_bookshelf",
-                    "crafter",
-                    "dispenser",
-                    "dropper",
-                    "furnace",
-                    "hopper",
-                    "shulker_box",
-                    "smoker",
-                    "trapped_chest");
+            Set.of("barrel", "blast_furnace", "brewing_stand",
+                "campfire", "chest", "chiseled_bookshelf",
+                "crafter", "dispenser", "dropper",
+                "furnace", "hopper", "shulker_box",
+                "smoker", "trapped_chest"
+            );
 
     @Override
     public String getName() {
@@ -52,12 +42,13 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
     @Override
     protected boolean innerHandle(CompoundTag compound) {
         String id = ResourceIds.path(NbtUtils.getString(compound, "id"));
-        translateCustomName(compound, id);
-        compound.accept(getVisitor(id));
-        return true;
+        ChangeTracker tracker = new ChangeTracker();
+        tracker.add(translateCustomName(compound, id));
+        compound.accept(getVisitor(id, tracker));
+        return tracker.changed;
     }
 
-    private static void translateCustomName(CompoundTag tag, String id) {
+    private static boolean translateCustomName(CompoundTag tag, String id) {
         String type = id.isBlank() ? "unknown" : id;
         String countType =
                 CONTAINER_TYPES.contains(type) ? "container." + type : "block_entity." + type;
@@ -69,31 +60,19 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
             translated |=
                     TranslationUtils.translateNbtComponent(tag, "custom_name", "name");
             if (translated) TranslationContext.increaseTypeCounts(countType);
+            return translated;
         }
     }
 
-    private TagVisitor getVisitor(String id) {
+    private TagVisitor getVisitor(String id, ChangeTracker tracker) {
         EntityTagVisitor entityVisitor = new EntityTagVisitor();
+        if (CONTAINER_TYPES.contains(id)) return itemListVisitor("Items", tracker);
         return switch (id) {
-            case "barrel",
-                            "blast_furnace",
-                            "brewing_stand",
-                            "campfire",
-                            "chest",
-                            "chiseled_bookshelf",
-                            "crafter",
-                            "dispenser",
-                            "dropper",
-                            "furnace",
-                            "hopper",
-                            "shulker_box",
-                            "smoker",
-                            "trapped_chest" ->
-                    itemListVisitor("Items");
-            case "jukebox" -> itemVisitor("RecordItem");
-            case "lectern" -> itemVisitor("Book");
-            case "brushable_block", "decorated_pot" -> itemVisitor("item");
-            case "sign", "hanging_sign" -> (SimpleTagVisitor) this::translateSign;
+            case "jukebox" -> itemVisitor("RecordItem", tracker);
+            case "lectern" -> itemVisitor("Book", tracker);
+            case "brushable_block", "decorated_pot" -> itemVisitor("item", tracker);
+            case "sign", "hanging_sign" ->
+                    (SimpleTagVisitor) tag -> tracker.add(translateSign(tag));
             case "beehive", "bee_nest" ->
                     (SimpleTagVisitor)
                             tag -> {
@@ -101,11 +80,11 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
                                 for (int i = 0; i < bees.size(); ++i) {
                                     CompoundTag bee = NbtUtils.getCompound(bees, i);
                                     CompoundTag entityData = NbtUtils.getCompound(bee, "entity_data");
-                                    CompoundTag nestedEntity =
-                                            NbtUtils.getCompound(entityData, "entity");
+                                    CompoundTag nestedEntity = NbtUtils.getCompound(entityData, "entity");
                                     if (!nestedEntity.isEmpty()) entityData = nestedEntity;
                                     entityData.accept(entityVisitor);
                                 }
+                                tracker.add(entityVisitor.isChanged());
                             };
             case "mob_spawner" ->
                     (SimpleTagVisitor)
@@ -119,6 +98,7 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
                                                     NbtUtils.getCompound(potentials, i), "data.entity")
                                             .accept(entityVisitor);
                                 }
+                                tracker.add(entityVisitor.isChanged());
                             };
             case "trial_spawner" ->
                     (SimpleTagVisitor)
@@ -138,21 +118,31 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
                                                 .accept(entityVisitor);
                                     }
                                 }
+                                tracker.add(entityVisitor.isChanged());
                             };
-            case "command_block" -> (SimpleTagVisitor) this::translateCommandBlock;
+            case "command_block" ->
+                    (SimpleTagVisitor) tag -> tracker.add(translateCommandBlock(tag));
             default -> SimpleTagVisitor.INSTANCE;
         };
     }
 
-    private static SimpleTagVisitor itemListVisitor(String field) {
-        return tag -> NbtUtils.getList(tag, field, Tag.TAG_COMPOUND).accept(new ItemTagVisitor());
+    private static SimpleTagVisitor itemListVisitor(String field, ChangeTracker tracker) {
+        return tag -> {
+            ItemTagVisitor visitor = new ItemTagVisitor();
+            NbtUtils.getList(tag, field, Tag.TAG_COMPOUND).accept(visitor);
+            tracker.add(visitor.isChanged());
+        };
     }
 
-    private static SimpleTagVisitor itemVisitor(String field) {
-        return tag -> NbtUtils.getCompound(tag, field).accept(new ItemTagVisitor());
+    private static SimpleTagVisitor itemVisitor(String field, ChangeTracker tracker) {
+        return tag -> {
+            ItemTagVisitor visitor = new ItemTagVisitor();
+            NbtUtils.getCompound(tag, field).accept(visitor);
+            tracker.add(visitor.isChanged());
+        };
     }
 
-    private void translateSign(CompoundTag tag) {
+    private boolean translateSign(CompoundTag tag) {
         int index = TranslationContext.getTypeCounts("sign");
         boolean translated = false;
 
@@ -174,18 +164,36 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
         }
 
         if (translated) TranslationContext.increaseTypeCounts("sign");
+        return translated;
     }
 
-    private void translateCommandBlock(CompoundTag tag) {
+    private boolean translateCommandBlock(CompoundTag tag) {
         String countType = "command_block";
         int index = TranslationContext.getTypeCounts(countType);
+        boolean changed;
         try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
-            if (TranslationUtils.translateNbtComponent(tag, "LastOutput", "last_output")) {
+            changed = TranslationUtils.translateNbtComponent(tag, "LastOutput", "last_output");
+            if (changed) {
                 TranslationContext.increaseTypeCounts(countType);
             }
         }
 
-        String command = FunctionHandler.processFunction(List.of(NbtUtils.getString(tag, "Command")));
-        tag.putString("Command", command);
+        if (tag.contains("Command")) {
+            String originalCommand = NbtUtils.getString(tag, "Command");
+            String translatedCommand = FunctionHandler.processFunction(List.of(originalCommand));
+            if (!originalCommand.equals(translatedCommand)) {
+                tag.putString("Command", translatedCommand);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private static final class ChangeTracker {
+        private boolean changed;
+
+        private void add(boolean changed) {
+            this.changed |= changed;
+        }
     }
 }

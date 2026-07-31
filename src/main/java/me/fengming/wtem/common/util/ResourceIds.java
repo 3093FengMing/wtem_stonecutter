@@ -1,7 +1,8 @@
 package me.fengming.wtem.common.util;
 
-/** Small helpers for resource identifiers stored as strings.
- * @author FengMing*/
+/**
+ * @author FengMing
+ */
 public final class ResourceIds {
     private ResourceIds() {}
 

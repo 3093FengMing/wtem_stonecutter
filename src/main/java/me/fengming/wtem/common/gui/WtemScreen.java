@@ -39,12 +39,14 @@ public class WtemScreen extends Screen {
     private Button extractButton;
     private final BooleanConsumer callback;
     private final WorldExtractor worldExtractor;
+    private boolean completionHandled;
 
     public static WtemScreen create(
             Minecraft mc,
             BooleanConsumer callback,
             DataFixer dataFixer,
             LevelStorageSource.LevelStorageAccess levelStorage) {
+        WorldStem worldStem = null;
         try {
             WorldOpenFlows worldOpenFlows = mc.createWorldOpenFlows();
             PackRepository packRepository = ServerPacksSource.createPackRepository(levelStorage);
@@ -56,31 +58,28 @@ public class WtemScreen extends Screen {
                     DataFixTypes.LEVEL.updateToCurrentVersion(
                             DataFixers.getDataFixer(), unfixedDataTag, NbtUtils.getDataVersion(unfixedDataTag));
             //?} else
-             //levelStorage.getDataTag();
+            //levelStorage.getDataTag();
 
-            WtemScreen wtemScreen;
-            try (WorldStem worldStem =
+            worldStem =
                     worldOpenFlows.loadWorldStem(
-                            /*?if >=26.1 >>*/ levelStorage, dataTag, false, packRepository)) {
-                RegistryAccess.Frozen registry = worldStem.registries().compositeAccess();
-                //? if >= 26.1 {
-                WorldData worldData = worldStem.worldDataAndGenSettings().data();
-                levelStorage.saveDataTag(worldData);
-                //?} else {
-                /*levelStorage.saveDataTag(registry, worldStem.worldData());
-                 
-                *///?}
-                wtemScreen = new WtemScreen(mc, callback, dataFixer, worldStem, levelStorage, registry);
-            }
-            return wtemScreen;
+                            /*?if >=26.1 >>*/ levelStorage, dataTag, false, packRepository);
+            RegistryAccess.Frozen registry = worldStem.registries().compositeAccess();
+            //? if >= 26.1 {
+            WorldData worldData = worldStem.worldDataAndGenSettings().data();
+            levelStorage.saveDataTag(worldData);
+            //?} else {
+            /*levelStorage.saveDataTag(registry, worldStem.worldData());
+
+            *///?}
+            return new WtemScreen(callback, dataFixer, worldStem, levelStorage, registry);
         } catch (Exception e) {
+            if (worldStem != null) worldStem.close();
             Wtem.LOGGER.warn("Failed to load world, can't extract world", e);
         }
         return null;
     }
 
     private WtemScreen(
-            Minecraft mc,
             BooleanConsumer callback,
             DataFixer dataFixer,
             WorldStem worldStem,
@@ -89,7 +88,7 @@ public class WtemScreen extends Screen {
         super(WTEM_SCREEN_TITLE);
         this.callback = callback;
         this.worldExtractor =
-                new WorldExtractor(mc, dataFixer, worldStem, levelStorage, registryAccess);
+                new WorldExtractor(dataFixer, worldStem, levelStorage, registryAccess);
     }
 
     @Override
@@ -99,6 +98,7 @@ public class WtemScreen extends Screen {
                 Button.builder(
                                 CommonComponents.GUI_CANCEL,
                                 button -> {
+                                    this.completionHandled = true;
                                     this.worldExtractor.cancel();
                                     this.callback.accept(false);
                                 })
@@ -110,6 +110,7 @@ public class WtemScreen extends Screen {
                         Button.builder(
                                         WTEM_EXTRACT,
                                         button -> {
+                                            button.active = false;
                                             this.worldExtractor.startThread();
                                         })
                                 .bounds(this.width / 2 - 100, this.height / 4 + 120, 200, 20)
@@ -118,19 +119,26 @@ public class WtemScreen extends Screen {
 
     @Override
     public void tick() {
-        if (this.worldExtractor.isFinished()) {
-            this.callback.accept(true);
-        }
+        if (this.completionHandled) return;
+        WorldExtractor.ExtractionStatus status = this.worldExtractor.getExtractionStatus();
+        if (!status.isTerminal()) return;
+
+        this.completionHandled = true;
+        this.callback.accept(status == WorldExtractor.ExtractionStatus.SUCCEEDED);
     }
 
     @Override
     public void onClose() {
+        this.completionHandled = true;
+        this.worldExtractor.cancel();
         this.callback.accept(false);
     }
 
     @Override
     public void removed() {
-        this.worldExtractor.cancel();
+        if (!this.worldExtractor.getExtractionStatus().isTerminal()) {
+            this.worldExtractor.cancel();
+        }
     }
 
     @Override

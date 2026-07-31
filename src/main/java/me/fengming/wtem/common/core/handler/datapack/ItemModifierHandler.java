@@ -22,7 +22,7 @@ public class ItemModifierHandler extends NonExtraResourceHandler {
     public static final HandlerFactory FACTORY = ItemModifierHandler::new;
 
     public ItemModifierHandler(Function<Identifier, Path> filePath, Context context) {
-        super("item_modifier", filePath);
+        super("item_modifier", filePath, context);
     }
 
     @Override
@@ -58,8 +58,7 @@ public class ItemModifierHandler extends NonExtraResourceHandler {
                     modifier.add("lore", array);
                 }
                 case "minecraft:set_name" ->
-                        modifier.add(
-                                "name", TranslationUtils.translateLiteral(modifier.get("name")));
+                        modifier.add("name", TranslationUtils.translateLiteral(modifier.get("name")));
                 case "minecraft:set_components" -> {
                     var compound = NbtUtils.fromJson(modifier.getAsJsonObject("components"));
                     new ItemTagVisitor().visitComponents(compound);

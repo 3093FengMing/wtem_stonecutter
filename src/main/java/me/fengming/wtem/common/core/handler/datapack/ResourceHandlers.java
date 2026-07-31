@@ -1,20 +1,21 @@
 package me.fengming.wtem.common.core.handler.datapack;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Stream;
 
 /**
  * @author FengMing
  */
-public class ResourceHandlers {
-    public static final List<HandlerFactory> HANDLERS = new ArrayList<>();
+public final class ResourceHandlers {
+    private static List<HandlerFactory> handlers = List.of();
 
-    public static void addHandler(HandlerFactory factory) {
-        HANDLERS.add(factory);
+    private ResourceHandlers() {}
+
+    public static synchronized void initialize(List<HandlerFactory> defaultHandlers) {
+        if (!handlers.isEmpty()) return;
+        handlers = List.copyOf(defaultHandlers);
     }
 
-    public static Stream<HandlerFactory> getStream() {
-        return HANDLERS.stream();
+    public static List<HandlerFactory> all() {
+        return handlers;
     }
 }

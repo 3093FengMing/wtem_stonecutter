@@ -8,7 +8,8 @@ import net.minecraft.resources.Identifier;
  * @author FengMing
  */
 public abstract class NonExtraResourceHandler extends ResourceHandler {
-    public NonExtraResourceHandler(String path, Function<Identifier, Path> filePath) {
-        super(path, filePath, null);
+    public NonExtraResourceHandler(
+            String path, Function<Identifier, Path> filePath, Context context) {
+        super(path, filePath, context);
     }
 }

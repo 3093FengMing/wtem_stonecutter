@@ -16,8 +16,7 @@ public class SimpleJsonHandler extends ResourceHandler {
     public static HandlerFactory factory(String path, String... targetPaths) {
         List<String> targets = List.of(targetPaths);
         return (filePath, context) ->
-                new SimpleJsonHandler(
-                        path, filePath, context.set(targets, null));
+                new SimpleJsonHandler(path, filePath, context.withTargets(targets));
     }
 
     public SimpleJsonHandler(String path, Function<Identifier, Path> filePath, Context context) {
@@ -30,7 +29,7 @@ public class SimpleJsonHandler extends ResourceHandler {
     }
 
     protected String processJsonFile(IoSupplier<InputStream> supplier, List<String> list) {
-        if (list == null) return "";
+        if (list == null) throw new IllegalStateException("Missing component target paths");
         var jsonObj = ResourceIo.readJson(supplier, "").getAsJsonObject();
         for (String s : list) {
             TranslationUtils.translateJsonElement(jsonObj, s);
@@ -38,22 +37,4 @@ public class SimpleJsonHandler extends ResourceHandler {
         return GSON.toJson(jsonObj);
     }
 
-    public static class AdvancementHandlerSimple extends SimpleJsonHandler {
-        public static final HandlerFactory FACTORY = AdvancementHandlerSimple::new;
-
-        public AdvancementHandlerSimple(Function<Identifier, Path> filePath, Context context) {
-            super(
-                    "advancement",
-                    filePath,
-                    context.set(List.of("display.title", "display.description"), null));
-        }
-    }
-
-    public static class EnchantmentHandlerSimple extends SimpleJsonHandler {
-        public static final HandlerFactory FACTORY = EnchantmentHandlerSimple::new;
-
-        public EnchantmentHandlerSimple(Function<Identifier, Path> filePath, Context context) {
-            super("enchantment", filePath, context.set(List.of("description"), null));
-        }
-    }
 }

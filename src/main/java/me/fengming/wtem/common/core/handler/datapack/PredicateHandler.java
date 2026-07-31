@@ -19,7 +19,7 @@ public class PredicateHandler extends NonExtraResourceHandler {
     public static final HandlerFactory FACTORY = PredicateHandler::new;
 
     public PredicateHandler(Function<Identifier, Path> filePath, Context context) {
-        super("predicate", filePath);
+        super("predicate", filePath, context);
     }
 
     @Override

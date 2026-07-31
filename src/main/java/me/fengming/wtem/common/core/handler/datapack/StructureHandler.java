@@ -5,7 +5,6 @@ import java.nio.file.Path;
 import java.util.function.Function;
 import me.fengming.wtem.common.core.handler.StructureTemplateWHandler;
 import me.fengming.wtem.common.util.ResourceIo;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.FileToIdConverter;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.IoSupplier;
@@ -30,7 +29,7 @@ public class StructureHandler extends ResourceHandler {
         StructureTemplateManager m = this.context.structureManager();
         if (m == null) return;
         StructureTemplate structure = m.get(STRUCTURE_CONVERTOR.fileToId(rl)).orElse(null);
-        CompoundTag modified = new StructureTemplateWHandler().handle(structure);
-        ResourceIo.writeNbt(getFilePath(rl), modified);
+        StructureTemplateWHandler.Result result = new StructureTemplateWHandler().process(structure);
+        if (result.changed()) ResourceIo.writeNbt(getFilePath(rl), result.tag());
     }
 }

@@ -58,43 +58,69 @@ public class CustomScoreBoard extends Scoreboard {
     }
 
     *///?}
-    public void extract() {
-        this.getPlayerTeams().forEach(team -> {
+    public boolean extract() {
+        boolean changed = false;
+        for (var team : this.getPlayerTeams()) {
             String key = "team." + team.getName();
-            team.setDisplayName(translate(key + ".name", team.getDisplayName()));
-            team.setPlayerPrefix(translate(key + ".prefix", team.getPlayerPrefix()));
-            team.setPlayerSuffix(translate(key + ".suffix", team.getPlayerSuffix()));
-        });
+            Component displayName = translate(key + ".name", team.getDisplayName());
+            Component prefix = translate(key + ".prefix", team.getPlayerPrefix());
+            Component suffix = translate(key + ".suffix", team.getPlayerSuffix());
+            if (displayName != team.getDisplayName()) {
+                team.setDisplayName(displayName);
+                changed = true;
+            }
+            if (prefix != team.getPlayerPrefix()) {
+                team.setPlayerPrefix(prefix);
+                changed = true;
+            }
+            if (suffix != team.getPlayerSuffix()) {
+                team.setPlayerSuffix(suffix);
+                changed = true;
+            }
+        }
 
-        this.getObjectives().forEach(objective -> {
+        for (Objective objective : this.getObjectives()) {
             String key = "score." + objective.getName();
-            objective.setDisplayName(translate(key + ".name", objective.getDisplayName()));
+            Component displayName = translate(key + ".name", objective.getDisplayName());
+            if (displayName != objective.getDisplayName()) {
+                objective.setDisplayName(displayName);
+                changed = true;
+            }
 
             NumberFormat translatedFormat = translateNumberFormat(key + ".format", objective.numberFormat());
             if (translatedFormat != objective.numberFormat()) {
                 objective.setNumberFormat(translatedFormat);
+                changed = true;
             }
 
-            this.extractPlayerScores(objective, key);
-        });
+            changed |= this.extractPlayerScores(objective, key);
+        }
+        return changed;
     }
 
-    private void extractPlayerScores(Objective objective, String objectiveKey) {
+    private boolean extractPlayerScores(Objective objective, String objectiveKey) {
+        boolean changed = false;
         for (PlayerScoreEntry entry : this.listPlayerScores(objective)) {
             ScoreHolder owner = ScoreHolder.forNameOnly(entry.owner());
             ScoreAccess score = this.getOrCreatePlayerScore(owner, objective, false);
             String key = objectiveKey + ".player." + entry.owner();
 
             if (entry.display() != null) {
-                score.display(translate(key + ".name", entry.display()));
+                Component display = translate(key + ".name", entry.display());
+                if (display != entry.display()) {
+                    score.display(display);
+                    changed = true;
+                }
             }
 
             NumberFormat translatedFormat =
                     translateNumberFormat(key + ".format", entry.numberFormatOverride());
             if (translatedFormat != entry.numberFormatOverride()) {
                 score.numberFormatOverride(translatedFormat);
+                changed = true;
             }
         }
+        return changed;
     }
 
     private static Component translate(String key, Component component) {

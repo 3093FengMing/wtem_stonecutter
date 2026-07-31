@@ -21,21 +21,21 @@ public class StructureTemplateWHandler extends AbstractWHandler<CompoundTag> {
         return "structure";
     }
 
-    public CompoundTag handle(StructureTemplate structure) {
-        if (structure == null) return new CompoundTag();
+    public Result process(StructureTemplate structure) {
+        if (structure == null) return new Result(new CompoundTag(), false);
         CompoundTag compound = structure.save(new CompoundTag());
-        handle(compound);
-        return compound;
+        return new Result(compound, handle(compound));
     }
 
     @Override
     protected boolean innerHandle(CompoundTag tag) {
         BlockEntityWHandler beHandler = new BlockEntityWHandler();
+        boolean changed = false;
         ListTag blocks = NbtUtils.getList(tag, "blocks", CompoundTag.TAG_COMPOUND);
         for (int i = 0; i < blocks.size(); i++) {
             CompoundTag block = NbtUtils.getCompound(blocks, i);
             if (!block.contains("nbt")) continue;
-            beHandler.handle(NbtUtils.getCompound(block, "nbt"));
+            changed |= beHandler.handle(NbtUtils.getCompound(block, "nbt"));
         }
 
         EntityTagVisitor entityVisitor = new EntityTagVisitor();
@@ -45,6 +45,8 @@ public class StructureTemplateWHandler extends AbstractWHandler<CompoundTag> {
             if (!entity.contains("nbt")) continue;
             NbtUtils.getCompound(entity, "nbt").accept(entityVisitor);
         }
-        return true;
+        return changed || entityVisitor.isChanged();
     }
+
+    public record Result(CompoundTag tag, boolean changed) {}
 }

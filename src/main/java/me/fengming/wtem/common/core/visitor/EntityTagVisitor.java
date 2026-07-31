@@ -15,6 +15,11 @@ import net.minecraft.nbt.Tag;
  * @author FengMing
  */
 public class EntityTagVisitor implements SimpleTagVisitor {
+    private boolean changed;
+
+    public boolean isChanged() {
+        return this.changed;
+    }
 
     @Override
     public void visitCompound(CompoundTag tag) {
@@ -24,37 +29,43 @@ public class EntityTagVisitor implements SimpleTagVisitor {
             if (!traversal.entered()) return;
 
             String entityId = ResourceIds.path(NbtUtils.getString(tag, "id"));
-            translateEntityText(tag, entityId);
+            this.changed |= translateEntityText(tag, entityId);
             visitPassengers(tag);
-            visitItems(tag);
-            visitTrades(tag);
+            this.changed |= visitItems(tag);
+            this.changed |= visitTrades(tag);
         }
     }
 
-    private static void translateEntityText(CompoundTag tag, String entityId) {
+    private static boolean translateEntityText(CompoundTag tag, String entityId) {
         String type = entityId.isBlank() ? "unknown" : entityId;
-        translateIndexedComponent(tag, "CustomName", "entity." + type, "name");
+        boolean changed =
+                translateIndexedComponent(tag, "CustomName", "entity." + type, "name");
 
         if ("text_display".equals(entityId)) {
-            translateIndexedComponent(tag, "text", "text_display", "text");
+            changed |= translateIndexedComponent(tag, "text", "text_display", "text");
         }
         if ("command_block_minecart".equals(entityId)) {
-            translateIndexedComponent(
+            changed |= translateIndexedComponent(
                     tag, "LastOutput", "command_block_minecart", "last_output");
         }
         if ("mannequin".equals(entityId)) {
-            translateIndexedComponent(tag, "description", "mannequin", "description");
+            changed |=
+                    translateIndexedComponent(
+                            tag, "description", "mannequin", "description");
         }
+        return changed;
     }
 
-    private static void translateIndexedComponent(
+    private static boolean translateIndexedComponent(
             CompoundTag tag, String field, String countType, String keyPath) {
         int index = TranslationContext.getTypeCounts(countType);
         try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
             if (TranslationUtils.translateNbtComponent(tag, field, keyPath)) {
                 TranslationContext.increaseTypeCounts(countType);
+                return true;
             }
         }
+        return false;
     }
 
     private void visitPassengers(CompoundTag tag) {
@@ -64,7 +75,7 @@ public class EntityTagVisitor implements SimpleTagVisitor {
         }
     }
 
-    private static void visitItems(CompoundTag tag) {
+    private static boolean visitItems(CompoundTag tag) {
         ItemTagVisitor itemVisitor = new ItemTagVisitor();
 
         CompoundTag equipment = NbtUtils.getCompound(tag, "equipment");
@@ -86,9 +97,10 @@ public class EntityTagVisitor implements SimpleTagVisitor {
                         "body_armor_item")) {
             NbtUtils.getCompound(tag, field).accept(itemVisitor);
         }
+        return itemVisitor.isChanged();
     }
 
-    private static void visitTrades(CompoundTag tag) {
+    private static boolean visitTrades(CompoundTag tag) {
         ItemTagVisitor itemVisitor = new ItemTagVisitor();
         ListTag recipes =
                 NbtUtils.getList(NbtUtils.getCompound(tag, "Offers"), "Recipes", Tag.TAG_COMPOUND);
@@ -98,5 +110,6 @@ public class EntityTagVisitor implements SimpleTagVisitor {
                 NbtUtils.getCompound(recipe, field).accept(itemVisitor);
             }
         }
+        return itemVisitor.isChanged();
     }
 }
