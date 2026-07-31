@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "compatibilityLevel": "${java}",
+  "package": "me.fengming.wtem.common.mixin",
+  "mixins": [
+    "MixinWorldUpgrader"
+  ],
+  "client": [
+    "MixinEditWorldScreen"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

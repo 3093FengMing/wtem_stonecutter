@@ -16,8 +16,24 @@ stonecutter parameters {
             replace("ResourceLocation", "Identifier")
         }
 
+        // NBT primitive accessors were renamed in 1.21.11. The identifier keeps
+        // these otherwise broad method replacements scoped to NbtUtils.java.
+        string(current.parsed >= "1.21.11", "nbt_api") {
+            replace(".getAsString()", ".value()")
+            replace(".getAllKeys()", ".keySet()")
+        }
+
         string(current.parsed >= "26.1") {
             replace("classTweaker v2 named", "classTweaker v2 official")
+            replace("SimpleRegionStorageUpgrader", "RegionStorageUpgrader")
+            replace("createPathToResource", "resolvePath")
+        }
+
+        string(current.parsed >= "26.1", "screen") {
+            replace("render", "extractRenderState")
+            replace("GuiGraphics", "GuiGraphicsExtractor")
+            replace("drawCenteredString", "centeredText")
+            replace("drawString", "text")
         }
     }
 }

@@ -1,0 +1,34 @@
+classTweaker v2 official
+#?if >= 26.1 {
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder dataFixer Lcom/mojang/datafixers/DataFixer;
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder dataFixType Lnet/minecraft/util/datafix/DataFixTypes;
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder type Ljava/lang/String;
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder folderName Ljava/lang/String;
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder defaultVersion I
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder recreateRegionFiles Z
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder upgradeProgress Lnet/minecraft/util/worldupdate/UpgradeProgress;
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder dataFixContextTag Lnet/minecraft/nbt/CompoundTag;
+accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder tagModifiers Lit/unimi/dsi/fastutil/ints/Int2ObjectAVLTreeMap;
+#?} else {
+
+#extendable method net/minecraft/util/worldupdate/WorldUpgrader work ()V
+#extendable class net/minecraft/util/worldupdate/WorldUpgrader$AbstractUpgrader
+#extendable class net/minecraft/util/worldupdate/WorldUpgrader$RegionStorageUpgrader
+#
+#accessible field net/minecraft/util/worldupdate/WorldUpgrader finished Z
+#accessible field net/minecraft/util/worldupdate/WorldUpgrader thread Ljava/lang/Thread;
+#accessible field net/minecraft/util/worldupdate/WorldUpgrader overworldDataStorage Lnet/minecraft/world/level/storage/DimensionDataStorage;
+#
+##?if > 1.21.1 && < 26.1 {
+##extendable method net/minecraft/util/worldupdate/WorldUpgrader$RegionStorageUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/Component;)V
+##extendable method net/minecraft/util/worldupdate/WorldUpgrader$AbstractUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Ljava/lang/String;Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/Component;)V
+##?}
+#
+##?if = 1.21.1 {
+##extendable method net/minecraft/util/worldupdate/WorldUpgrader$RegionStorageUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Lnet/minecraft/network/chat/MutableComponent;Lnet/minecraft/network/chat/MutableComponent;)V
+##extendable method net/minecraft/util/worldupdate/WorldUpgrader$AbstractUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Ljava/lang/String;Lnet/minecraft/network/chat/MutableComponent;Lnet/minecraft/network/chat/MutableComponent;)V
+##?}
+
+#?}
+
+accessible method net/minecraft/world/level/levelgen/structure/templatesystem/StructureTemplateManager listGenerated ()Ljava/util/stream/Stream;

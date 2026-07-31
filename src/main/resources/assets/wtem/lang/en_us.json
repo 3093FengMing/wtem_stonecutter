@@ -1,0 +1,11 @@
+{
+  "gui.wtem.extract": "Extract",
+  "gui.wtem.main.warn": "Warning!",
+  "gui.wtem.main.extraction.working": "Extracting...",
+  "gui.wtem.main.extraction.finished": "Finished extracting",
+  "gui.wtem.main.title": "World Translation Extractor",
+  "gui.wtem.main.info.extracted": "Extracted chunks: %s",
+  "gui.wtem.main.info.total": "Total chunks: %s",
+  "gui.wtem.main.progress.counter": "%s / %s",
+  "gui.wtem.main.progress.percentage": "%s%%"
+}

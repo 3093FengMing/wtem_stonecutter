@@ -53,7 +53,7 @@ dependencies {
 loom {
     fabricModJsonPath = rootProject.file("src/main/resources/fabric.mod.json") // Useful for interface injection
     accessWidenerPath = sc.process(
-        rootProject.file("src/main/resources/template.ct"),
+        rootProject.file("src/main/resources/wtem.ct"),
         "build/processed.ct"
     )
 
@@ -88,17 +88,23 @@ tasks {
             set(key, value)
         }
 
+        val mixin = when {
+            stonecutter.eval(stonecutter.current.version, ">=26.1") -> "mixins.wtem.26.1.json"
+            else -> "mixins.wtem.json"
+        }
+
         val props = buildMap {
             register("id", "mod.id")
             register("name", "mod.name")
             register("version", "mod.version")
             register("minecraft", "mod.mc_compat")
+            // register("mixin", mixin)
         }
 
         filesMatching("fabric.mod.json") { expand(props) }
 
         val mixinJava = "JAVA_${requiredJava.majorVersion}"
-        filesMatching("*.mixins.json") { expand("java" to mixinJava) }
+        filesMatching("mixins.*.json") { expand("java" to mixinJava) }
     }
 
     register<Copy>("buildAndCollect") {

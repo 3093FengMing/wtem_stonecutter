@@ -1,28 +1,23 @@
 {
   "schemaVersion": 1,
-  "id": "${id}",
+  "id": "wtem",
   "version": "${version}",
   "name": "${name}",
-  "description": "This is an example description! Tell everyone what your mod is about!",
-  "authors": [
-    "Me!"
-  ],
-  "contact": {
-    "homepage": "https://stonecutter.kikugie.dev/",
-    "sources": "https://codeberg.org/stonecutter/template-fabric"
-  },
-  "license": "CC0-1.0",
-  "icon": "assets/template/icon.png",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "GPL-3.0",
+  "icon": "assets/wtem/icon.png",
   "environment": "*",
+  "accessWidener": "wtem.ct",
   "entrypoints": {
     "main": [
-      "com.example.TemplateMod"
+      "me.fengming.wtem.common.Wtem"
     ]
   },
   "mixins": [
-    "template.mixins.json"
+    "mixins.wtem.json"
   ],
-  "accessWidener": "template.ct",
   "depends": {
     "fabricloader": ">=0.17",
     "minecraft": "${minecraft}"
