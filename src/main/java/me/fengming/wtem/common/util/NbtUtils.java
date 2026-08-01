@@ -22,19 +22,19 @@ public final class NbtUtils {
     private NbtUtils() {}
 
     public static String getString(CompoundTag compound, String name) {
-        if (compound == null || name == null || !(compound.get(name) instanceof StringTag(String value)))
+        if (compound == null || name == null || !(compound.get(name) instanceof StringTag value))
             return "";
-        return value;
+        return value.value();
     }
 
     public static String getString(ListTag list, int index) {
         if (list == null
                 || index < 0
                 || index >= list.size()
-                || !(list.get(index) instanceof StringTag(String value))) {
+                || !(list.get(index) instanceof StringTag value)) {
             return "";
         }
-        return value;
+        return value.value();
     }
 
     public static CompoundTag getCompound(CompoundTag compound, String name) {
