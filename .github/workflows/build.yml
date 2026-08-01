@@ -68,7 +68,7 @@ jobs:
           --stacktrace
 
       - name: Upload jars
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wtem-${{ matrix.version }}
           path: |
@@ -79,7 +79,7 @@ jobs:
       - name: Upload test results
         # Test reports are most useful exactly when the build failed.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.version }}
           path: versions/${{ matrix.version }}/build/reports/tests/
