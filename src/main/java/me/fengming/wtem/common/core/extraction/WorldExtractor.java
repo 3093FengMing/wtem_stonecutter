@@ -14,7 +14,6 @@ import me.fengming.wtem.common.core.handler.EntityWHandler;
 import me.fengming.wtem.common.core.handler.datapack.ResourceHandler;
 import me.fengming.wtem.common.core.handler.datapack.ResourceHandlers;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
-import me.fengming.wtem.common.core.misc.CustomScoreBoard;
 import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.DirectoryPublisher;
 import me.fengming.wtem.common.util.NbtUtils;
@@ -49,6 +48,7 @@ import net.minecraft.server.bossevents.CustomBossEvents;
 import net.minecraft.util.worldupdate.RegionStorageUpgrader;
 import net.minecraft.util.worldupdate.UpgradeProgress;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.storage.SavedDataStorage;
 import java.util.ArrayList;
 import java.util.concurrent.ThreadFactory;
 //?} else {
@@ -85,6 +85,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     private static final ThreadFactory THREAD_FACTORY = new ThreadFactoryBuilder().setDaemon(true).build();
 
     private final List<ResourceKey<Level>> orderedLevels;
+    private final SavedDataStorage savedDataStorage;
 
     private final Thread thread;
 
@@ -126,6 +127,10 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                         .map(Registries::levelStemToLevel)
                         .sorted(Comparator.comparing(ResourceIds::key))
                         .toList();
+
+        this.savedDataStorage =
+                new SavedDataStorage(
+                        levelStorage.getLevelPath(LevelResource.DATA), dataFixer, registry);
 
         this.thread = THREAD_FACTORY.newThread(this::runExtractionSafely);
 
@@ -352,7 +357,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     public void extractBossBar() {
         //? if >=26.1 {
-        CustomBossEvents events = this.overworldSavedDataStorage.computeIfAbsent(CustomBossEvents.TYPE);
+        CustomBossEvents events = this.savedDataStorage.computeIfAbsent(CustomBossEvents.TYPE);
         ChangeTracker tracker = new ChangeTracker();
         for (var event : events.getEvents()) {
             // A boss bar has no position, so its own id is the only thing that identifies it, and
@@ -391,9 +396,9 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     public void extractScoreBoard() {
         CustomScoreBoard sb = new CustomScoreBoard();
         //? if >=26.1 {
-        sb.load(this.overworldSavedDataStorage.computeIfAbsent(ScoreboardSaveData.TYPE).getData());
+        sb.load(this.savedDataStorage.computeIfAbsent(ScoreboardSaveData.TYPE).getData());
         if (sb.extract()) {
-            this.overworldSavedDataStorage.set(ScoreboardSaveData.TYPE, new ScoreboardSaveData(sb.store()));
+            this.savedDataStorage.set(ScoreboardSaveData.TYPE, new ScoreboardSaveData(sb.store()));
             this.session.recordModifiedSavedData();
         }
         //?} else if >=1.21.11 {
@@ -448,7 +453,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
         runNonRegionExtraction();
 
-        this.overworldSavedDataStorage.saveAndJoin();
+        this.savedDataStorage.saveAndJoin();
     }
 
     private void work(DataFixTypes dataFixType, AbstractWHandler<CompoundTag> handler, String folderName) {
@@ -458,13 +463,13 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         int previousCopiesFileAmounts = 0;
 
         for (ResourceKey<Level> level : this.orderedLevels) {
-            RegionStorageUpgrader upgrader = new ChunkExtractor(handler, dataFixType, folderName, previousCopiesFileAmounts);
+            var upgrader = new ChunkExtractor(handler, dataFixType, folderName, previousCopiesFileAmounts);
             upgrader.init(level, this.levelStorage);
             previousCopiesFileAmounts += upgrader.fileAmount();
             upgraders.add(upgrader);
         }
 
-        for (RegionStorageUpgrader upgrader : upgraders) {
+        for (var upgrader : upgraders) {
             if (shouldStop()) return;
             upgrader.upgrade();
         }
@@ -589,13 +594,6 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         exportManifest();
     }
 
-    /**
-     * Writes the extraction report beside the catalog.
-     *
-     * <p>The report is a companion the game never reads, so failing to write it must not fail a run
-     * that otherwise succeeded: the world has already been rewritten by this point and the catalog is
-     * already on disk. The failure is recorded so it still shows up in the report screen.
-     */
     private void exportManifest() {
         Path file = manifestOutput();
         try {
@@ -641,6 +639,11 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     public void close() {
         if (!this.closed.compareAndSet(false, true)) return;
         try {
+            //? if >=26.1 {
+            // Closing flushes, so this has to happen even on a failed run: the level-root storage is
+            // ours rather than the upgrader's, and super.close() does not know about it.
+            this.savedDataStorage.close();
+            //?}
             //? if >1.21.1 {
             super.close();
             //?} else {

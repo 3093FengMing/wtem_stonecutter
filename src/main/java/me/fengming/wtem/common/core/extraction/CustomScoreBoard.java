@@ -1,7 +1,7 @@
-package me.fengming.wtem.common.core.misc;
+package me.fengming.wtem.common.core.extraction;
 
 import java.util.function.Consumer;
-import me.fengming.wtem.common.core.extraction.TranslationContext;
+
 import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.TranslationUtils;
 import net.minecraft.network.chat.Component;

@@ -13,6 +13,7 @@ import java.util.List;
  *
  * <p>The file is a companion to the catalog, not a replacement: the catalog stays exactly the JSON
  * the game loads, and nothing here is read back in.
+ * @author FengMing
  */
 public final class ExtractionManifest {
     public static final List<String> COLUMNS =

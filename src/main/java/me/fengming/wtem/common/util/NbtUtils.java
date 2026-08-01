@@ -2,6 +2,7 @@
 
 package me.fengming.wtem.common.util;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
 import java.util.OptionalDouble;
@@ -10,6 +11,7 @@ import java.util.Set;
 import me.fengming.wtem.common.Wtem;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.NumericTag;
 import net.minecraft.nbt.StringTag;
 
@@ -20,19 +22,19 @@ public final class NbtUtils {
     private NbtUtils() {}
 
     public static String getString(CompoundTag compound, String name) {
-        if (compound == null || name == null || !(compound.get(name) instanceof StringTag value))
+        if (compound == null || name == null || !(compound.get(name) instanceof StringTag(String value)))
             return "";
-        return value.value();
+        return value;
     }
 
     public static String getString(ListTag list, int index) {
         if (list == null
                 || index < 0
                 || index >= list.size()
-                || !(list.get(index) instanceof StringTag value)) {
+                || !(list.get(index) instanceof StringTag(String value))) {
             return "";
         }
-        return value.value();
+        return value;
     }
 
     public static CompoundTag getCompound(CompoundTag compound, String name) {
@@ -105,6 +107,16 @@ public final class NbtUtils {
             return new JsonObject();
         }
         return result.get().getAsJsonObject();
+    }
+
+    public static JsonArray toJson(ListTag list) {
+        if (list == null || list.isEmpty()) return new JsonArray();
+        var json = NbtOps.INSTANCE.convertTo(JsonOps.INSTANCE, list);
+        if (!json.isJsonArray()) {
+            Wtem.LOGGER.warn("Couldn't encode a list tag as JSON: {}", list);
+            return new JsonArray();
+        }
+        return json.getAsJsonArray();
     }
 
     static CompoundTag findCompound(CompoundTag compound, String name) {

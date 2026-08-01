@@ -1,0 +1,86 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore: [ '**.md', 'LICENSE', 'NOTICE', '.gitignore', '.editorconfig' ]
+  pull_request:
+    branches: [ main ]
+    paths-ignore: [ '**.md', 'LICENSE', 'NOTICE', '.gitignore', '.editorconfig' ]
+  workflow_dispatch:
+
+# A new push to the same branch makes in-flight runs obsolete.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every version that fails, not just the first one.
+      fail-fast: false
+      matrix:
+        include:
+          - version: '1.21.1'
+            java: 21
+          - version: '1.21.3'
+            java: 21
+          - version: '1.21.4'
+            java: 21
+          - version: '1.21.5'
+            java: 21
+          - version: '1.21.8'
+            java: 21
+          - version: '1.21.10'
+            java: 21
+          - version: '1.21.11'
+            java: 21
+          - version: '26.1.x'
+            java: 25
+          - version: '26.2.x'
+            java: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      # The build script pins JvmVendorSpec.ADOPTIUM. Java 21 is installed alongside the version
+      # under test so Gradle itself always has a toolchain it can run on.
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            ${{ matrix.java }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Build
+        run: >
+          ./gradlew :${{ matrix.version }}:build :${{ matrix.version }}:validateAccessWidener
+          --stacktrace
+
+      - name: Upload jars
+        uses: actions/upload-artifact@v4
+        with:
+          name: wtem-${{ matrix.version }}
+          path: |
+            versions/${{ matrix.version }}/build/libs/*.jar
+            !versions/${{ matrix.version }}/build/libs/*-dev.jar
+          if-no-files-found: error
+
+      - name: Upload test results
+        # Test reports are most useful exactly when the build failed.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.version }}
+          path: versions/${{ matrix.version }}/build/reports/tests/
+          if-no-files-found: ignore

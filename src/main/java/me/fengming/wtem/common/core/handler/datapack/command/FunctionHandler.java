@@ -18,9 +18,7 @@ import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.HandlerFactory;
 import me.fengming.wtem.common.core.handler.datapack.NonExtraResourceHandler;
 import me.fengming.wtem.common.core.visitor.EntityTagVisitor;
-import me.fengming.wtem.common.util.ResourceIo;
-import me.fengming.wtem.common.util.ResourceIds;
-import me.fengming.wtem.common.util.TranslationUtils;
+import me.fengming.wtem.common.util.*;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -31,6 +29,8 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.data.registries.VanillaRegistries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -294,35 +294,53 @@ public class FunctionHandler extends NonExtraResourceHandler {
         Object value = argument.getResult();
         String replacement;
 
-        if (value instanceof Component component) {
-            Component translated = TranslationUtils.translateLiteral(component);
-            if (translated == component) return null;
-            replacement = TranslationUtils.translateToJson(translated);
-        } else if (value instanceof ItemInput itemInput) {
-            replacement =
-                    StructuredCommandArgumentAdapter.translateItem(itemInput, registries)
-                            .orElse(null);
-            if (replacement == null) return null;
-        } else if (value instanceof BlockInput blockInput) {
-            replacement =
-                    StructuredCommandArgumentAdapter.translateBlock(blockInput, sourceArgument)
-                            .orElse(null);
-            if (replacement == null) return null;
-        } else if (value instanceof CompoundTag compound
-                && "nbt".equals(argumentName)
-                && containsCommandNode(context, "summon")) {
-            CompoundTag translatedTag = compound.copy();
-            boolean temporaryId = !translatedTag.contains("id");
-            if (temporaryId) {
-                findEntityId(context).ifPresent(id -> translatedTag.putString("id", id));
+        switch (value) {
+            case Component component -> {
+                Component translated = TranslationUtils.translateLiteral(component);
+                if (translated == component) return null;
+                replacement = TranslationUtils.translateToJson(translated);
             }
-            EntityTagVisitor entityVisitor = new EntityTagVisitor();
-            translatedTag.accept(entityVisitor);
-            if (!entityVisitor.isChanged()) return null;
-            if (temporaryId) translatedTag.remove("id");
-            replacement = translatedTag.toString();
-        } else {
-            return null;
+            case ItemInput itemInput -> {
+                replacement =
+                    StructuredCommandArgumentAdapter.translateItem(itemInput, registries)
+                        .orElse(null);
+                if (replacement == null) return null;
+            }
+            case BlockInput blockInput -> {
+                replacement =
+                    StructuredCommandArgumentAdapter.translateBlock(blockInput, sourceArgument)
+                        .orElse(null);
+                if (replacement == null) return null;
+            }
+            case CompoundTag compound when "nbt".equals(argumentName) && containsCommandNode(context, "summon") -> {
+                CompoundTag translatedTag = compound.copy();
+                boolean temporaryId = !translatedTag.contains("id");
+                if (temporaryId) {
+                    findEntityId(context).ifPresent(id -> translatedTag.putString("id", id));
+                }
+                EntityTagVisitor entityVisitor = new EntityTagVisitor();
+                translatedTag.accept(entityVisitor);
+                if (!entityVisitor.isChanged()) return null;
+                if (temporaryId) translatedTag.remove("id");
+                replacement = translatedTag.toString();
+            }
+            case StringTag stringTag -> {
+                String translated = TranslationUtils.translateLiteral(stringTag.toString(), false);
+                if (translated.equals(stringTag.toString())) return null;
+                replacement = translated;
+            }
+            case ListTag listTag -> {
+                ChangeTracker tracker = new ChangeTracker();
+                ListTag tag = listTag.copy();
+                for (int i = 0; i < listTag.size(); i++) {
+                    tracker.add(TranslationUtils.translateNbtComponent(tag, i, "list." + i));
+                }
+                if (!tracker.isChanged()) return null;
+                replacement = NbtUtils.toJson(tag).toString();
+            }
+            case null, default -> {
+                return null;
+            }
         }
 
         return new Replacement(

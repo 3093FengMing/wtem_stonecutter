@@ -7,6 +7,12 @@ mod.version = "0.1.0"
 deps.fabric_loader = "0.19.3"
 loomx.loom_version = "1.17-SNAPSHOT"
 
+# Publishing targets. Leave `publish.modrinth_id` / `publish.curseforge_id` empty to skip that platform.
+publish.github_repo = "3093FengMing/wtem_stonecutter"
+publish.modrinth_id = ""
+publish.curseforge_id = ""
+publish.curseforge_slug = ""
+
 ["1.21.1"]
 # Mod compatibility range in fabric.mod.json
 mod.mc_compat = ">=1.21 <=1.21.1"

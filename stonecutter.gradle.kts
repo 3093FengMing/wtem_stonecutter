@@ -4,6 +4,33 @@ plugins {
 
 stonecutter active "26.2.x"
 
+// Each version node publishes on its own, so without ordering they race to create the GitHub
+// release for the tag. Ordering the endpoint tasks (not `publishMods`, which only delegates to
+// them) makes one node create the release and the rest attach their files to it.
+stonecutter tasks {
+    order("publishGithub")
+    order("publishModrinth")
+    order("publishCurseforge")
+}
+
+tasks.register("buildAll") {
+    group = "build"
+    description = "Builds every version and collects the jars into `build/libs/{mod version}/`"
+    dependsOn(stonecutter.tasks.named("buildAndCollect"))
+}
+
+tasks.register("testAll") {
+    group = "verification"
+    description = "Runs the tests against every version"
+    dependsOn(stonecutter.tasks.named("test"))
+}
+
+tasks.register("publishAll") {
+    group = "publishing"
+    description = "Publishes every version to all configured platforms"
+    dependsOn(stonecutter.tasks.named("publishMods"))
+}
+
 // See https://stonecutter.kikugie.dev/wiki/config/params
 stonecutter parameters {
     swaps["mod_version"] = "\"${property("mod.version")}\";"

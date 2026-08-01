@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Minecraft, Fabric API and Loom versions live in `stonecutter.properties.toml` rather than a
+  # dependency file, so Dependabot cannot see them. Only the action and Gradle wrapper updates are
+  # automated here; the mod dependencies stay manual.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [ dependencies, github-actions ]
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [ dependencies, gradle ]
+    commit-message:
+      prefix: build

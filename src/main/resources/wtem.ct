@@ -13,7 +13,6 @@ accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder up
 accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder dataFixContextTag Lnet/minecraft/nbt/CompoundTag;
 accessible field net/minecraft/util/worldupdate/RegionStorageUpgrader$Builder tagModifiers Lit/unimi/dsi/fastutil/ints/Int2ObjectAVLTreeMap;
 accessible field net/minecraft/util/worldupdate/WorldUpgrader upgradeProgress Lnet/minecraft/util/worldupdate/UpgradeProgress;
-accessible field net/minecraft/util/worldupdate/WorldUpgrader overworldSavedDataStorage Lnet/minecraft/world/level/storage/SavedDataStorage;
 #?} else {
 
 #extendable method net/minecraft/util/worldupdate/WorldUpgrader work ()V

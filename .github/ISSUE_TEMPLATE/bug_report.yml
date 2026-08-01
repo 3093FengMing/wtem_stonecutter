@@ -1,0 +1,84 @@
+name: Bug report / 错误报告
+description: Something went wrong during extraction / 提取过程中出现了问题
+labels: [ bug ]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        中文或英文均可 / Chinese or English are both fine.
+
+  - type: input
+    id: mod-version
+    attributes:
+      label: Mod version / 模组版本
+      description: The full file name, e.g. `wtem-0.1.0+1.21.1.jar` / 完整文件名
+      placeholder: wtem-0.1.0+1.21.1.jar
+    validations:
+      required: true
+
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft version / 游戏版本
+      placeholder: "1.21.1"
+    validations:
+      required: true
+
+  - type: input
+    id: loader-version
+    attributes:
+      label: Fabric Loader version / Fabric Loader 版本
+      placeholder: 0.19.3
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened / 问题描述
+      description: What you expected and what happened instead / 期望的行为与实际的行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      description: |
+        The world data that triggers it matters most. A minimal world, data pack or the exact
+        command / NBT is far more useful than a description.
+        触发问题的世界数据最关键。最小复现的世界、数据包，或具体的命令、NBT 比文字描述有用得多。
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log / 日志
+      description: |
+        `logs/latest.log`, or the relevant part of it. Extraction warnings are logged there.
+        `logs/latest.log` 或其中的相关片段。提取过程的警告会记录在这里。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: Extraction report / 提取报告
+      description: |
+        Optional. The rows of `<world>/en_us.csv` around the problem, if the text landed in the
+        wrong key or the wrong place.
+        可选。若某段文本的键或位置不对，请附上 `<世界目录>/en_us.csv` 中相关的几行。
+      render: csv
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Config / 配置
+      description: Your `config/wtem.json`, if it differs from the default / 若非默认配置请附上
+      render: json

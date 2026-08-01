@@ -19,6 +19,9 @@ plugins {
     // Sometimes it is needed to make Gradle run at all, so it doesn't hurt to have
     // (https://github.com/gradle/foojay-toolchains)
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+
+    // Publishes to Modrinth, CurseForge and GitHub Releases (https://modmuss50.github.io/mod-publish-plugin/)
+    id("me.modmuss50.mod-publish-plugin") version "2.2.0" apply false
 }
 
 stonecutter {

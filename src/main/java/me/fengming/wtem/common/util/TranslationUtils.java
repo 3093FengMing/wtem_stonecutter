@@ -205,23 +205,33 @@ public final class TranslationUtils {
 
     private static Tag translateNbtComponentTag(Tag originalTag, String stringValue) {
         if (originalTag instanceof StringTag) {
-            Component component;
+            // A string tag means one of two different things. Legacy saves store a whole component
+            // serialized to JSON in one, while the component format reads a string as the literal
+            // text of a component in its own right. Which one it is decides the form the
+            // translation has to be written back in, so the answer is carried to the write below.
+            Component component = null;
+            boolean serializedJson = false;
             if (looksLikeSerializedJson(stringValue)) {
                 try {
                     component = deserializeComponent(JsonParser.parseString(stringValue));
-                } catch (JsonParseException | IllegalStateException ignoredException) {
-                    component = deserializeNbtComponent(originalTag);
-                }
-            } else {
-                component = deserializeNbtComponent(originalTag);
+                    serializedJson = true;
+                } catch (JsonParseException | IllegalStateException ignoredException) {}
             }
+            if (component == null) component = deserializeNbtComponent(originalTag);
 
             Component translated = translateLiteral(component);
             if (translated == component) return originalTag;
 
-            // Legacy component lists are lists of JSON strings. Keeping StringTag here avoids
-            // violating ListTag's homogeneous element-type requirement.
-            return StringTag.valueOf(serializeComponent(translated).toString());
+            // Writing JSON back over a field that held literal text would leave a component whose
+            // text reads as '{"translate":...}' in game rather than a translatable one, so only a
+            // field that already carried JSON keeps carrying it. Before 1.21.5 the component
+            // argument parser only accepts the JSON form, so there structured NBT is not an option.
+            //? if >=1.21.5 {
+            return serializedJson
+                    ? StringTag.valueOf(serializeComponent(translated).toString())
+                    : serializeNbtComponent(translated);
+            //?} else
+            //return StringTag.valueOf(serializeComponent(translated).toString());
         }
 
         Component component = deserializeNbtComponent(originalTag);

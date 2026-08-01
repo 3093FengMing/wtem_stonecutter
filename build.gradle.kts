@@ -1,10 +1,17 @@
+import me.modmuss50.mpp.ReleaseType
+import me.modmuss50.mpp.platforms.modrinth.ModrinthApi
+import me.modmuss50.mpp.platforms.modrinth.ModrinthEnvironment
+
 plugins {
     // This plugin applies the correct loom variant based on the Minecraft version
     id("dev.kikugie.loom-back-compat")
+    id("me.modmuss50.mod-publish-plugin")
 }
 
 // DO NOT set group = ...!
-version = "${property("mod.version")}+${sc.current.version}"
+val modVersion = property("mod.version") as String
+val modName = property("mod.name") as String
+version = "$modVersion+${sc.current.version}"
 base.archivesName = property("mod.id") as String
 
 val requiredJava: JavaVersion = when {
@@ -15,7 +22,7 @@ val requiredJava: JavaVersion = when {
     else -> JavaVersion.VERSION_1_8
 }
 
-// This can be used for publishing on Modrinth and Curseforge
+// The Minecraft releases this jar is marked compatible with on Modrinth and Curseforge
 val compatibleVersions: List<String> = sc.properties.rawOrNull("mod", "mc_releases")
     ?.asList().orEmpty().map { it.toString() }
 
@@ -127,3 +134,86 @@ tasks {
         into(rootProject.layout.buildDirectory.file("libs/${project.property("mod.version")}"))
     }
 }
+
+// region Publishing
+
+/** Reads an optional `publish.*` property, treating a blank value as absent. */
+fun publishProperty(name: String): String? =
+    (sc.properties.rawOrNull("publish", name)?.toString())?.takeIf { it.isNotBlank() }
+
+/**
+ * `STABLE` unless the version carries a pre-release suffix, so `0.2.0-beta.1` is published as a
+ * beta without needing a second place to keep in sync.
+ */
+val releaseType: ReleaseType = when {
+    "-alpha" in modVersion -> ReleaseType.ALPHA
+    "-beta" in modVersion || "-rc" in modVersion -> ReleaseType.BETA
+    else -> ReleaseType.STABLE
+}
+
+/**
+ * The changelog is passed in by CI (`CHANGELOG` env var) so the release notes come from the tag
+ * rather than being committed into the build script.
+ */
+val changelogText: String = providers.environmentVariable("CHANGELOG").orNull
+    ?.takeIf { it.isNotBlank() }
+    ?: "See https://github.com/${publishProperty("github_repo")}/releases/tag/v$modVersion"
+
+publishMods {
+    file = loomx.modJar.flatMap { it.archiveFile }
+    additionalFiles.from(loomx.modSourcesJar.flatMap { it.archiveFile })
+    version = project.version.toString()
+    displayName = "$modName $modVersion for Minecraft ${sc.current.version}"
+    changelog = changelogText
+    type = releaseType
+    modLoaders.add("fabric")
+
+    // Publishing to a live platform is irreversible, so default to a dry run and only go live when
+    // the platform's token is actually present in the environment. `-Ppublish.dry_run=true` forces
+    // a dry run even then, which is how the release workflow offers a rehearsal.
+    dryRun = providers.gradleProperty("publish.dry_run").orNull.toBoolean() ||
+            (providers.environmentVariable("MODRINTH_TOKEN").orNull.isNullOrBlank() &&
+                    providers.environmentVariable("CURSEFORGE_TOKEN").orNull.isNullOrBlank() &&
+                    providers.environmentVariable("GITHUB_TOKEN").orNull.isNullOrBlank())
+
+    publishProperty("modrinth_id")?.let { id ->
+        modrinth {
+            accessToken = providers.environmentVariable("MODRINTH_TOKEN")
+            projectId = id
+            minecraftVersions.addAll(compatibleVersions)
+            // fabric.mod.json declares `"environment": "client"`
+            environment = ModrinthEnvironment.CLIENT_ONLY
+            requires("fabric-api")
+            additionalFile(loomx.modSourcesJar.flatMap { it.archiveFile }) {
+                type = ModrinthApi.AdditionalFileType.SOURCES_JAR
+            }
+        }
+    }
+
+    publishProperty("curseforge_id")?.let { id ->
+        curseforge {
+            accessToken = providers.environmentVariable("CURSEFORGE_TOKEN")
+            projectId = id
+            publishProperty("curseforge_slug")?.let { projectSlug = it }
+            minecraftVersions.addAll(compatibleVersions)
+            javaVersions.add(requiredJava)
+            client = true
+            server = false
+            requires("fabric-api")
+        }
+    }
+
+    publishProperty("github_repo")?.let { repo ->
+        github {
+            accessToken = providers.environmentVariable("GITHUB_TOKEN")
+            repository = repo
+            commitish = providers.environmentVariable("GITHUB_SHA").orElse("main")
+            tagName = "v$modVersion"
+            // Every version node uploads into the single release created for the tag, so the first
+            // node to run must be allowed to create it and later nodes must not create their own.
+            allowEmptyFiles = true
+        }
+    }
+}
+
+// endregion

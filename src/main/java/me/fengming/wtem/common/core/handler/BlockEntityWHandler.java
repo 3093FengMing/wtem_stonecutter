@@ -206,6 +206,7 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
 
         if (tag.contains("Command")) {
             String originalCommand = NbtUtils.getString(tag, "Command");
+            if (originalCommand.startsWith("/")) originalCommand = originalCommand.substring(1);
             String translatedCommand = FunctionHandler.processFunction(List.of(originalCommand));
             if (tracker.add(!originalCommand.equals(translatedCommand))) {
                 tag.putString("Command", translatedCommand);

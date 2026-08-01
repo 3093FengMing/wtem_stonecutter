@@ -1,5 +1,7 @@
 # WTEM（World Translation Extractor Mod）
 
+中文 | [English](README.en.md)
+
 WTEM 是一个纯客户端的 Fabric 模组，用于把 Minecraft 世界、世界数据包和世界生成结构中的硬编码文本转换为翻译键，并生成对应的 i18n 条目。同时支持多个 Minecraft 版本。
 
 ## 支持版本
@@ -140,15 +142,15 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 }
 ```
 
-- `stages`：按提取阶段开关。`region` 是区块中的方块实体，`entities` 是实体区块，其余对应记分板、bossbar、世界数据包和世界生成结构。
-- `resources`：按数据包资源类型开关，键为注册目录名。生成的文件会列出当前版本实际支持的全部类型，未列出的按启用处理。
+- `stages`：控制是否执行该提取阶段。`region` 对应方块实体，`entities` 对应实体，其余对应记分板、bossbar、数据包和生成结构。默认为启用。
+- `resources`：控制是否提取该数据包资源类型，键为注册目录名。生成的文件会列出当前版本实际支持的全部类型。默认为启用。
 - `key_reuse`：相同文本是否复用已有的翻译键。`default` 是全局策略，`overrides` 按键前缀覆盖，命中的最长前缀生效。需要同一段文本在不同位置分别翻译时把对应前缀设为 `false`，例如 `{"datapack.": false}` 让数据包中的文本各自成键。
 - `key_naming`：翻译键的命名方式，详见下一节。
-- `nbt_max_depth`：NBT 递归提取的层数上限，防止相互嵌套的物品等把栈耗尽。每一层嵌套的物品、实体或方块实体各占一层，超出上限的数据保持原样。小于 1 的值按默认值处理。
-- `rebuild_nested_keys`：物品上的 `block_entity_data` 是否用自己的键从头命名。默认 `true`，例如不考虑复用的情况下，同一把木剑在无论在哪里都得到相同的键。若为 `false` ，则形如 `item.shulker_box.1.container.wooden_sword.name`。
-- `skipped`：可以翻译、但通常没有必要翻译的文本，详见下一节。
+- `nbt_max_depth`：NBT 递归提取的层数上限。每一层嵌套的物品、实体或方块实体各占一层，超出上限的数据保持原样。小于 1 的值按默认值 32 处理。
+- `rebuild_nested_keys`：物品上的 `block_entity_data` 是否用自己的键从头命名。默认 `true`，例如不考虑复用的情况下，一把在潜影盒木剑在无论在哪里都得到形如 `item.wooden_sword.1.name`。若为 `false` ，则形如 `item.shulker_box.1.container.wooden_sword.1.name`。
+- `skipped`：是否要跳过一些特殊文本，详见下一节。
 - `language_file`：写入世界目录的语言文件名。只接受纯文件名，包含路径分隔符或非 `.json` 后缀时会被忽略。
-- `builtin_entries`：预置在语言文件中的条目。提取到的文本若与某条预置文本相同，就直接复用它的键，不再单独占一个键。默认预置空字符串、空格和 0~9，这类文本没有翻译价值却出现频繁（空的告示牌行、记分板上的数字），预置后它们各只占一行。整段留空对象 `{}` 表示不预置任何条目；整段删掉则保持默认。
+- `builtin_entries`：预置在语言文件中的条目。提取到的文本若与某条预置文本相同，就直接复用它的键，不再单独占一个键。默认预置空字符串、空格和 0~9。整段留空对象 `{}` 表示不预置任何条目；整段删掉则保持默认。
 
 ### 跳过的文本
 
@@ -190,6 +192,48 @@ PowerShell 示例：
 ```
 
 这会把共享源码恢复为仓库配置的 `26.2.x` 状态。
+
+一次构建全部版本：
+
+```powershell
+.\gradlew.bat buildAll
+```
+
+## 持续集成与发布
+
+`.github/workflows/build.yml` 在推送到 `main` 和提交 PR 时对九个版本节点分别构建、跑测试并校验 access widener。每个节点是矩阵中独立的一份 checkout，因此 Stonecutter 切换 active project 时不会互相干扰。
+
+`.github/workflows/release.yml` 在推送 `v*` 标签时触发，先校验标签与 `mod.version` 一致，再运行 `buildAll` 和 `publishAll`。发布说明取自标签的注释信息（`git tag -a`），所以变更日志跟着标签走，不写在构建脚本里。也可以手动触发，勾选 `dry_run` 只做一次演练。
+
+发布目标写在 `stonecutter.properties.toml` 中：
+
+```toml
+publish.github_repo = "3093FengMing/wtem_stonecutter"
+publish.modrinth_id = ""
+publish.curseforge_id = ""
+publish.curseforge_slug = ""
+```
+
+留空表示跳过该平台，所以在填入真实 ID 之前发布配置是惰性的。需要的仓库 Secrets：
+
+| Secret              | 用途                                          |
+|---------------------|-----------------------------------------------|
+| `MODRINTH_TOKEN`    | Modrinth PAT，需要 `Create versions` 权限     |
+| `CURSEFORGE_TOKEN`  | CurseForge API Token                          |
+| `GITHUB_TOKEN`      | 自动提供，无需配置                            |
+
+对应的 token 缺失时该平台自动退化为 dry run，因此未配置的平台会被跳过而不是让整个发布失败。本地运行 `.\gradlew.bat publishAll` 在没有 token 的情况下同样只做演练。
+
+版本号后缀决定发布类型：带 `-alpha` 发为 alpha，带 `-beta` 或 `-rc` 发为 beta，其余为正式版。
+
+发布一个版本：
+
+```powershell
+# 1. 更新 stonecutter.properties.toml 中的 mod.version
+# 2. 提交
+git tag -a v0.1.0 -m "变更日志正文写在这里"
+git push origin v0.1.0
+```
 
 ## 许可证与致谢
 
