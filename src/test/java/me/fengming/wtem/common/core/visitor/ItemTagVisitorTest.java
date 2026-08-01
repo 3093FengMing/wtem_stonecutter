@@ -284,6 +284,7 @@ class ItemTagVisitorTest {
                         WtemConfig.DEFAULT_NBT_MAX_DEPTH,
                         false,
                         WtemConfig.Skipped.DEFAULT,
+                        WtemConfig.DEFAULT_SKIPPED_PATHS,
                         Map.of(),
                         WtemConfig.DEFAULT_LANGUAGE_FILE),
                 () ->

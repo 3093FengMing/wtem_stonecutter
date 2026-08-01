@@ -230,6 +230,7 @@ class EntityWHandlerTest {
                         3,
                         true,
                         WtemConfig.Skipped.DEFAULT,
+                        WtemConfig.DEFAULT_SKIPPED_PATHS,
                         Map.of(),
                         WtemConfig.DEFAULT_LANGUAGE_FILE),
                 () -> {

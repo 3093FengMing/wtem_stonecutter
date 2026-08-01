@@ -212,7 +212,7 @@ class FunctionHandlerTest {
 
     @Test
     void testSimpleDataModify() {
-        String command = "execute if score segment animation matches 5 run data modify entity @e[tag=eye_03,limit=1] text set value \"\\uE005\"";
+        String command = "execute if score segment animation matches 5 run data modify entity @e[tag=eye_03,limit=1] text set value \"TEST\"";
         String result = FunctionHandler.processFunction(List.of(command));
 
         assertNotEquals(command, result);
