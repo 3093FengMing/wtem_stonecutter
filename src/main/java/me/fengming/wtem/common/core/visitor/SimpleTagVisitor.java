@@ -1,7 +1,5 @@
 package me.fengming.wtem.common.core.visitor;
 
-import me.fengming.wtem.common.util.NbtUtils;
-import me.fengming.wtem.common.util.TranslationUtils;
 import net.minecraft.nbt.ByteArrayTag;
 import net.minecraft.nbt.ByteTag;
 import net.minecraft.nbt.CompoundTag;
@@ -64,14 +62,7 @@ public interface SimpleTagVisitor extends TagVisitor {
     default void visitLongArray(LongArrayTag tag) {}
 
     @Override
-    default void visitList(ListTag tag) {
-        if (tag.isEmpty()) return;
-        for (int i = 0; i < tag.size(); i++) {
-            tag.setTag(
-                    i,
-                    StringTag.valueOf(TranslationUtils.translateLiteral(NbtUtils.getString(tag, i), false)));
-        }
-    }
+    default void visitList(ListTag tag) {}
 
     @Override
     default void visitEnd(EndTag tag) {}

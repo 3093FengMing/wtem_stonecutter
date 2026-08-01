@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import me.fengming.wtem.common.config.WtemConfig;
+import me.fengming.wtem.common.core.extraction.table.ExtractionOrigin;
+import me.fengming.wtem.common.core.extraction.table.ExtractionRecord;
 
 /**
  * @author FengMing
@@ -70,7 +72,13 @@ public final class TranslationContext {
         boolean reuse = !state.keepDuplicates && state.keyReuse.allows(path);
         if (reuse) {
             String existing = state.textToKey.get(value);
-            if (existing != null) return existing;
+            if (existing != null) {
+                // The text is already named, but this is a second place it appears, and that is
+                // exactly what a translator needs to know before rewording it. Record the sighting
+                // and mark it as a reuse so the row is not mistaken for a second entry.
+                state.records.add(new ExtractionRecord(existing, value, state.origin, true));
+                return existing;
+            }
         }
 
         String key =
@@ -79,7 +87,47 @@ public final class TranslationContext {
                         : allocateKey(state, state.keyNaming.baseKey(path));
         state.languageEntries.put(key, value);
         if (reuse) state.textToKey.put(value, key);
+        state.records.add(new ExtractionRecord(key, value, state.origin, false));
         return key;
+    }
+
+    /** Describes where the text reached by the current path came from. */
+    public static ExtractionOrigin getOrigin() {
+        return state().origin;
+    }
+
+    /**
+     * Replaces the origin for the duration of the scope.
+     *
+     * <p>The origin is separate from the key path because the two answer different questions: the
+     * path names the entry, while the origin says which chest in which chunk it was found in. A key
+     * is deliberately stable no matter where the data was found, so it cannot carry the location.
+     */
+    public static OriginScope pushOrigin(ExtractionOrigin origin) {
+        State state = state();
+        ExtractionOrigin previous = state.origin;
+        state.origin = origin == null ? ExtractionOrigin.UNKNOWN : origin;
+        return new OriginScope(previous);
+    }
+
+    /** Starts a fresh origin for an extraction stage. */
+    public static OriginScope pushSource(String source) {
+        return pushOrigin(ExtractionOrigin.of(source));
+    }
+
+    /** Narrows the current origin to a place inside it, such as a chunk or a datapack resource. */
+    public static OriginScope pushLocation(String segment) {
+        return pushOrigin(state().origin.addLocation(segment));
+    }
+
+    /** Narrows the current origin to the block, entity, or item the text is attached to. */
+    public static OriginScope pushSubject(String segment) {
+        return pushOrigin(state().origin.addSubject(segment));
+    }
+
+    /** Every entry the run produced, in allocation order, including repeat sightings. */
+    public static List<ExtractionRecord> records() {
+        return List.copyOf(state().records);
     }
 
     public static void setKeyNaming(WtemConfig.KeyNaming keyNaming) {
@@ -220,6 +268,8 @@ public final class TranslationContext {
         private final Map<String, String> textToKey = new LinkedHashMap<>();
         private final Map<String, Integer> typeCounts = new LinkedHashMap<>();
         private final Deque<String> pathStack = new ArrayDeque<>();
+        private final List<ExtractionRecord> records = new ArrayList<>();
+        private ExtractionOrigin origin = ExtractionOrigin.UNKNOWN;
         // How much of the path a restart keeps. Zero means a restart discards the whole path.
         private int baseDepth;
         // How many entries were seeded rather than extracted, so a report can tell the two apart.
@@ -238,6 +288,8 @@ public final class TranslationContext {
             copy.textToKey.putAll(this.textToKey);
             copy.typeCounts.putAll(this.typeCounts);
             copy.pathStack.addAll(this.pathStack);
+            copy.records.addAll(this.records);
+            copy.origin = this.origin;
             copy.baseDepth = this.baseDepth;
             copy.builtinEntryCount = this.builtinEntryCount;
             copy.keepDuplicates = this.keepDuplicates;
@@ -267,6 +319,22 @@ public final class TranslationContext {
             if (this.closed) return;
             this.closed = true;
             if (!this.committed) STATE.set(this.rollbackState);
+        }
+    }
+
+    public static final class OriginScope implements AutoCloseable {
+        private final ExtractionOrigin previousOrigin;
+        private boolean closed;
+
+        private OriginScope(ExtractionOrigin previousOrigin) {
+            this.previousOrigin = previousOrigin;
+        }
+
+        @Override
+        public void close() {
+            if (this.closed) return;
+            this.closed = true;
+            state().origin = this.previousOrigin;
         }
     }
 

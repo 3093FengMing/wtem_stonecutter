@@ -45,7 +45,8 @@ public abstract class ResourceHandler {
     }
 
     public boolean handle(Identifier rl, IoSupplier<InputStream> supplier) {
-        try (var transaction = TranslationContext.beginTransaction()) {
+        try (var transaction = TranslationContext.beginTransaction();
+                var ignored = TranslationContext.pushLocation(rl.toString())) {
             String p = rl.getPath();
             int extension = p.lastIndexOf('.');
             if (extension >= 0) p = p.substring(0, extension);

@@ -88,6 +88,10 @@ tasks {
     }
 
     processResources {
+        // CC BY requires the license notice to travel with the work, so the jar carries the text
+        // itself rather than only the SPDX id in fabric.mod.json.
+        from(rootProject.file("LICENSE"), rootProject.file("NOTICE"))
+
         fun MutableMap<String, String>.register(key: String, property: String) {
             val value: String = sc.properties[property]
             inputs.property(key, value)

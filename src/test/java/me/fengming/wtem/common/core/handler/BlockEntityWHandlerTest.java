@@ -1,11 +1,13 @@
 package me.fengming.wtem.common.core.handler;
 
+import static me.fengming.wtem.common.config.ConfigOverride.withSkipped;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.JsonParser;
 import java.util.Map;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.util.NbtUtils;
@@ -22,6 +24,24 @@ import org.junit.jupiter.api.Test;
  * converted through {@code CompoundTag.CODEC} so the same source works on every supported version.
  */
 class BlockEntityWHandlerTest {
+    /** A sign whose every line carries both the original text and its chat-filtered form. */
+    private static final String FILTERED_SIGN =
+            """
+            {"id":"minecraft:sign",
+             "front_text":{"messages":["{\\"text\\":\\"F0\\"}"],
+                           "filtered_messages":["{\\"text\\":\\"F0f\\"}"]},
+             "back_text":{"messages":["{\\"text\\":\\"B0\\"}"],
+                          "filtered_messages":["{\\"text\\":\\"B0f\\"}"]}}
+            """;
+
+    /** A command block holding both a cached output and a command with text of its own. */
+    private static final String COMMAND_BLOCK =
+            """
+            {"id":"minecraft:command_block",
+             "LastOutput":"{\\"text\\":\\"Done\\"}",
+             "Command":"title @a title {\\"text\\":\\"Welcome\\"}"}
+            """;
+
     @BeforeAll
     static void bootstrapMinecraft() {
         SharedConstants.tryDetectVersion();
@@ -171,15 +191,7 @@ class BlockEntityWHandlerTest {
 
     @Test
     void coversBothSignSidesAndBothMessageLists() {
-        CompoundTag sign = nbt("""
-                {"id":"minecraft:sign",
-                 "front_text":{"messages":["{\\"text\\":\\"F0\\"}"],
-                               "filtered_messages":["{\\"text\\":\\"F0f\\"}"]},
-                 "back_text":{"messages":["{\\"text\\":\\"B0\\"}"],
-                              "filtered_messages":["{\\"text\\":\\"B0f\\"}"]}}
-                """);
-
-        assertTrue(new BlockEntityWHandler().handle(sign));
+        assertTrue(new BlockEntityWHandler().handle(nbt(FILTERED_SIGN)));
 
         assertEquals(
                 Map.of(
@@ -188,6 +200,21 @@ class BlockEntityWHandlerTest {
                         "sign.1.back_text.0", "B0",
                         "sign.1.back_text.0.filtered", "B0f"),
                 TranslationContext.snapshot());
+    }
+
+    @Test
+    void leavesFilteredSignMessagesAloneWhenConfigured() {
+        withSkipped(
+                new WtemConfig.Skipped(false, true),
+                () -> {
+                    assertTrue(new BlockEntityWHandler().handle(nbt(FILTERED_SIGN)));
+
+                    assertEquals(
+                            Map.of(
+                                    "sign.1.front_text.0", "F0",
+                                    "sign.1.back_text.0", "B0"),
+                            TranslationContext.snapshot());
+                });
     }
 
     @Test
@@ -204,11 +231,7 @@ class BlockEntityWHandlerTest {
 
     @Test
     void translatesCommandBlockOutputAndCommand() {
-        CompoundTag commandBlock = nbt("""
-                {"id":"minecraft:command_block",
-                 "LastOutput":"{\\"text\\":\\"Done\\"}",
-                 "Command":"title @a title {\\"text\\":\\"Welcome\\"}"}
-                """);
+        CompoundTag commandBlock = nbt(COMMAND_BLOCK);
 
         assertTrue(new BlockEntityWHandler().handle(commandBlock));
 
@@ -216,6 +239,24 @@ class BlockEntityWHandlerTest {
         assertEquals("Done", entries.get("command_block.1.last_output"));
         assertEquals("Welcome", entries.get("block.command_block"));
         assertTrue(NbtUtils.getString(commandBlock, "Command").contains("translate"));
+    }
+
+    @Test
+    void leavesTheCommandBlockOutputAloneWhenConfigured() {
+        withSkipped(
+                new WtemConfig.Skipped(true, false),
+                () -> {
+                    CompoundTag commandBlock = nbt(COMMAND_BLOCK);
+
+                    // The command itself still carries text, so the block is still worth rewriting.
+                    assertTrue(new BlockEntityWHandler().handle(commandBlock));
+
+                    assertEquals(
+                            Map.of("block.command_block", "Welcome"),
+                            TranslationContext.snapshot());
+                    assertEquals(
+                            "{\"text\":\"Done\"}", NbtUtils.getString(commandBlock, "LastOutput"));
+                });
     }
 
     @Test

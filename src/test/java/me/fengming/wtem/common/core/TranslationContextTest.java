@@ -5,12 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import me.fengming.wtem.common.config.WtemConfig;
+import me.fengming.wtem.common.core.extraction.table.ExtractionOrigin;
+import me.fengming.wtem.common.core.extraction.table.ExtractionRecord;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -237,5 +240,80 @@ class TranslationContextTest {
         assertEquals(
                 Map.of("entity.zombie.1.name", "Persistent"),
                 TranslationContext.snapshot());
+    }
+
+    @Test
+    void recordsWhereEachEntryWasFound() {
+        try (var source = TranslationContext.pushSource("region")) {
+            try (var location = TranslationContext.pushLocation("minecraft:overworld chunk [1, 2]");
+                    var subject = TranslationContext.pushSubject("minecraft:chest")) {
+                TranslationContext.setKey("container.chest.1.name");
+                TranslationContext.addEntry("Loot");
+            }
+            // Leaving the scope drops the chest without dropping the stage it was found in.
+            assertEquals(ExtractionOrigin.of("region"), TranslationContext.getOrigin());
+        }
+
+        assertEquals(ExtractionOrigin.UNKNOWN, TranslationContext.getOrigin());
+        assertEquals(
+                List.of(
+                        new ExtractionRecord(
+                                "container.chest.1.name",
+                                "Loot",
+                                new ExtractionOrigin(
+                                        "region",
+                                        "minecraft:overworld chunk [1, 2]",
+                                        "minecraft:chest"),
+                                false)),
+                TranslationContext.records());
+    }
+
+    @Test
+    void recordsEveryPlaceASharedKeyWasFound() {
+        // Two chests holding the same text share one catalog entry, but a translator rewording it
+        // has to know about both, so the second sighting is recorded and marked as a reuse.
+        try (var ignored = TranslationContext.pushSource("region")) {
+            try (var first = TranslationContext.pushSubject("chest one")) {
+                TranslationContext.setKey("container.chest.1.name");
+                TranslationContext.addEntry("Loot");
+            }
+            try (var second = TranslationContext.pushSubject("chest two")) {
+                TranslationContext.setKey("container.chest.2.name");
+                assertEquals("container.chest.1.name", TranslationContext.addEntry("Loot"));
+            }
+        }
+
+        assertEquals(1, TranslationContext.snapshot().size());
+        List<ExtractionRecord> records = TranslationContext.records();
+        assertEquals(2, records.size(), records::toString);
+        assertEquals("container.chest.1.name", records.get(1).key());
+        assertEquals("chest two", records.get(1).origin().subject());
+        assertFalse(records.get(0).reused());
+        assertTrue(records.get(1).reused());
+    }
+
+    @Test
+    void discardsRecordsOfARolledBackTransaction() {
+        // A failed codec conversion leaves nothing in the world, so the report must not claim the
+        // text was extracted either.
+        try (var ignored = TranslationContext.pushSource("structures")) {
+            TranslationContext.setKey("structure.example.name");
+            try (var transaction = TranslationContext.beginTransaction()) {
+                TranslationContext.addEntry("Temporary");
+            }
+        }
+
+        assertEquals(List.of(), TranslationContext.records());
+    }
+
+    @Test
+    void restoresTheEnclosingOriginWhenAStageIsSkipped() {
+        try (var outer = TranslationContext.pushSource("region")) {
+            try (var inner = TranslationContext.pushSource("datapacks")) {
+                assertEquals("datapacks", TranslationContext.getOrigin().source());
+            }
+
+            assertEquals("region", TranslationContext.getOrigin().source());
+        }
     }
 }

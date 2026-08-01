@@ -31,6 +31,14 @@ public abstract class AbstractWHandler<T extends Tag> {
      * @return true if the tag has been changed; otherwise, false.
      */
     public boolean handle(T tag, boolean rebuildKey) {
+        // The key has to be pinned before it is pushed, because pushing is what restarts it. Pinning
+        // first makes the restart stop at the caller's path instead of at the root.
+        if (!rebuildKey) {
+            try (var ignored = TranslationContext.pinKey()) {
+                return handle(tag, true);
+            }
+        }
+
         try (var transaction = TranslationContext.beginTransaction();
                 var ignored = TranslationContext.pushKey(getKey(tag))) {
             boolean changed = innerHandle(tag);

@@ -93,37 +93,42 @@ public class CustomScoreBoard extends Scoreboard {
         ChangeTracker tracker = new ChangeTracker();
         for (var team : this.getPlayerTeams()) {
             String key = "team." + team.getName();
-            store(
-                    tracker,
-                    team.getDisplayName(),
-                    translate(key + ".name", team.getDisplayName()),
-                    team::setDisplayName);
-            store(
-                    tracker,
-                    team.getPlayerPrefix(),
-                    translate(key + ".prefix", team.getPlayerPrefix()),
-                    team::setPlayerPrefix);
-            store(
-                    tracker,
-                    team.getPlayerSuffix(),
-                    translate(key + ".suffix", team.getPlayerSuffix()),
-                    team::setPlayerSuffix);
+            try (var ignored = TranslationContext.pushSubject("team " + team.getName())) {
+                store(
+                        tracker,
+                        team.getDisplayName(),
+                        translate(key + ".name", team.getDisplayName()),
+                        team::setDisplayName);
+                store(
+                        tracker,
+                        team.getPlayerPrefix(),
+                        translate(key + ".prefix", team.getPlayerPrefix()),
+                        team::setPlayerPrefix);
+                store(
+                        tracker,
+                        team.getPlayerSuffix(),
+                        translate(key + ".suffix", team.getPlayerSuffix()),
+                        team::setPlayerSuffix);
+            }
         }
 
         for (Objective objective : this.getObjectives()) {
             String key = "score." + objective.getName();
-            store(
-                    tracker,
-                    objective.getDisplayName(),
-                    translate(key + ".name", objective.getDisplayName()),
-                    objective::setDisplayName);
-            store(
-                    tracker,
-                    objective.numberFormat(),
-                    translateNumberFormat(key + ".format", objective.numberFormat()),
-                    objective::setNumberFormat);
+            try (var ignored =
+                    TranslationContext.pushSubject("objective " + objective.getName())) {
+                store(
+                        tracker,
+                        objective.getDisplayName(),
+                        translate(key + ".name", objective.getDisplayName()),
+                        objective::setDisplayName);
+                store(
+                        tracker,
+                        objective.numberFormat(),
+                        translateNumberFormat(key + ".format", objective.numberFormat()),
+                        objective::setNumberFormat);
 
-            tracker.add(this.extractPlayerScores(objective, key));
+                tracker.add(this.extractPlayerScores(objective, key));
+            }
         }
         return tracker.isChanged();
     }
@@ -135,19 +140,21 @@ public class CustomScoreBoard extends Scoreboard {
             ScoreAccess score = this.getOrCreatePlayerScore(owner, objective, false);
             String key = objectiveKey + ".player." + entry.owner();
 
-            if (entry.display() != null) {
+            try (var ignored = TranslationContext.pushSubject("player " + entry.owner())) {
+                if (entry.display() != null) {
+                    store(
+                            tracker,
+                            entry.display(),
+                            translate(key + ".name", entry.display()),
+                            score::display);
+                }
+
                 store(
                         tracker,
-                        entry.display(),
-                        translate(key + ".name", entry.display()),
-                        score::display);
+                        entry.numberFormatOverride(),
+                        translateNumberFormat(key + ".format", entry.numberFormatOverride()),
+                        score::numberFormatOverride);
             }
-
-            store(
-                    tracker,
-                    entry.numberFormatOverride(),
-                    translateNumberFormat(key + ".format", entry.numberFormatOverride()),
-                    score::numberFormatOverride);
         }
         return tracker.isChanged();
     }

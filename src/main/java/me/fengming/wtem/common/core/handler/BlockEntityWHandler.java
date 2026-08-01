@@ -1,7 +1,9 @@
 package me.fengming.wtem.common.core.handler;
 
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.Set;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.core.visitor.EntityTagVisitor;
@@ -30,6 +32,9 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
                 "smoker", "trapped_chest"
             );
 
+    private static final String FILTERED_MESSAGES = "filtered_messages";
+    private static final List<String> SIGN_MESSAGES = List.of("messages", FILTERED_MESSAGES);
+
     @Override
     public String getName() {
         return "block_entities";
@@ -44,9 +49,29 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
     protected boolean innerHandle(CompoundTag compound) {
         String id = ResourceIds.path(NbtUtils.getString(compound, "id"));
         ChangeTracker tracker = new ChangeTracker();
-        tracker.add(translateCustomName(compound, id));
-        compound.accept(getVisitor(id, tracker));
+        try (var ignored = TranslationContext.pushSubject(describe(compound))) {
+            tracker.add(translateCustomName(compound, id));
+            compound.accept(getVisitor(id, tracker));
+        }
         return tracker.isChanged();
+    }
+
+    /**
+     * Names the block for the extraction report, with its coordinates when it stores them.
+     *
+     * <p>A block entity read out of a region file carries its own position, which is what makes a
+     * report row actionable: the translator can go and look at the block. A block entity nested in an
+     * item stack has no position of its own, so it is described by type alone.
+     */
+    private static String describe(CompoundTag compound) {
+        String id = NbtUtils.getString(compound, "id");
+        if (id.isBlank()) id = "block entity";
+
+        OptionalInt x = NbtUtils.getInt(compound, "x");
+        OptionalInt y = NbtUtils.getInt(compound, "y");
+        OptionalInt z = NbtUtils.getInt(compound, "z");
+        if (x.isEmpty() || y.isEmpty() || z.isEmpty()) return id;
+        return id + " (" + x.getAsInt() + ", " + y.getAsInt() + ", " + z.getAsInt() + ")";
     }
 
     private static boolean translateCustomName(CompoundTag tag, String id) {
@@ -149,13 +174,13 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
         try (var ignored = TranslationContext.pushKey("sign." + index)) {
             for (String side : List.of("front_text", "back_text")) {
                 CompoundTag text = NbtUtils.getCompound(tag, side);
-                for (String messageType : List.of("messages", "filtered_messages")) {
+                for (String messageType : SIGN_MESSAGES) {
+                    boolean filtered = FILTERED_MESSAGES.equals(messageType);
+                    if (filtered && WtemConfig.active().skipped().filteredText()) continue;
+
                     ListTag messages = NbtUtils.getList(text, messageType);
                     for (int i = 0; i < messages.size(); i++) {
-                        String keyPath = side + "." + i;
-                        if ("filtered_messages".equals(messageType)) {
-                            keyPath += ".filtered";
-                        }
+                        String keyPath = side + "." + i + (filtered ? ".filtered" : "");
                         tracker.add(TranslationUtils.translateNbtComponent(messages, i, keyPath));
                     }
                 }
@@ -168,12 +193,14 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
 
     private boolean translateCommandBlock(CompoundTag tag) {
         String countType = "command_block";
-        int index = TranslationContext.getTypeCounts(countType);
         ChangeTracker tracker = new ChangeTracker();
-        try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
-            if (tracker.add(
-                    TranslationUtils.translateNbtComponent(tag, "LastOutput", "last_output"))) {
-                TranslationContext.increaseTypeCounts(countType);
+        if (!WtemConfig.active().skipped().commandBlockOutput()) {
+            int index = TranslationContext.getTypeCounts(countType);
+            try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
+                if (tracker.add(
+                        TranslationUtils.translateNbtComponent(tag, "LastOutput", "last_output"))) {
+                    TranslationContext.increaseTypeCounts(countType);
+                }
             }
         }
 

@@ -31,6 +31,7 @@ import me.fengming.wtem.common.util.ResourceIo;
  * @param nbtMaxDepth how deep nested item, entity, and block-entity data is followed
  * @param rebuildNestedKeys whether data nested inside an item restarts its key instead of extending
  *     the key of the item that carries it
+ * @param skipped text that is translatable but that a pack may want left alone
  * @param builtinEntries entries the catalog starts with, which extracted text reuses instead of
  *     allocating a key of its own
  * @param languageFile name of the catalog written to the world directory
@@ -43,6 +44,7 @@ public record WtemConfig(
         KeyNaming keyNaming,
         int nbtMaxDepth,
         boolean rebuildNestedKeys,
+        Skipped skipped,
         Map<String, String> builtinEntries,
         String languageFile) {
 
@@ -68,6 +70,7 @@ public record WtemConfig(
                     KeyNaming.DEFAULT,
                     DEFAULT_NBT_MAX_DEPTH,
                     true,
+                    Skipped.DEFAULT,
                     DEFAULT_BUILTIN_ENTRIES,
                     DEFAULT_LANGUAGE_FILE);
 
@@ -174,6 +177,7 @@ public record WtemConfig(
                 KeyNaming.fromJson(object(json, "key_naming")),
                 readInt(json, "nbt_max_depth").orElse(DEFAULT_NBT_MAX_DEPTH),
                 readBoolean(json, "rebuild_nested_keys").orElse(DEFAULT.rebuildNestedKeys()),
+                Skipped.fromJson(object(json, "skipped")),
                 builtinEntries(json),
                 languageFile(json));
     }
@@ -207,6 +211,7 @@ public record WtemConfig(
         json.add("key_naming", this.keyNaming.toJson());
         json.addProperty("nbt_max_depth", this.nbtMaxDepth);
         json.addProperty("rebuild_nested_keys", this.rebuildNestedKeys);
+        json.add("skipped", this.skipped.toJson());
         json.add("builtin_entries", builtinJson);
         json.addProperty("language_file", this.languageFile);
         return json;
@@ -311,6 +316,37 @@ public record WtemConfig(
                 text,
                 Stream.of(values).map(id).toList());
         return Optional.empty();
+    }
+
+    /**
+     * Text the game will happily translate but that a pack may have no reason to.
+     *
+     * <p>Both settings default to off, which keeps the text being extracted. Switching one on drops
+     * the text from the catalog and leaves the world data holding it untouched, so nothing has to be
+     * undone to change the decision later: extracting again with the setting off picks the text up.
+     *
+     * @param commandBlockOutput the cached result of a command block's last run, which the game
+     *     overwrites on the next tick the block fires and which only an operator holding a redstone
+     *     debugger ever reads
+     * @param filteredText the profanity-filtered duplicate of a sign line or book page, shown in
+     *     place of the original to players who have chat filtering on. Only servers with a filter
+     *     configured write it, and it is the same sentence as the text beside it.
+     */
+    public record Skipped(boolean commandBlockOutput, boolean filteredText) {
+        public static final Skipped DEFAULT = new Skipped(false, false);
+
+        static Skipped fromJson(JsonObject json) {
+            return new Skipped(
+                    readBoolean(json, "command_block_output").orElse(DEFAULT.commandBlockOutput()),
+                    readBoolean(json, "filtered_text").orElse(DEFAULT.filteredText()));
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            json.addProperty("command_block_output", this.commandBlockOutput);
+            json.addProperty("filtered_text", this.filteredText);
+            return json;
+        }
     }
 
     /**

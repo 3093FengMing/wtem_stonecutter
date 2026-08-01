@@ -25,6 +25,8 @@ stonecutter parameters {
         string(current.parsed >= "1.21.5", "nbt_api") {
             replace(".getAsString()", ".value()")
             replace(".getAllKeys()", ".keySet()")
+            replace(".getAsInt()", ".intValue()")
+            replace(".getAsDouble()", ".doubleValue()")
         }
 
         string(current.parsed >= "26.1") {

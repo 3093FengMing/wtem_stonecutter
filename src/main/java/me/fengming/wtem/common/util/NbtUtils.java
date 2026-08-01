@@ -4,10 +4,13 @@ package me.fengming.wtem.common.util;
 
 import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
+import java.util.OptionalDouble;
+import java.util.OptionalInt;
 import java.util.Set;
 import me.fengming.wtem.common.Wtem;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NumericTag;
 import net.minecraft.nbt.StringTag;
 
 /**
@@ -60,6 +63,30 @@ public final class NbtUtils {
 
     public static Set<String> getKeys(CompoundTag compound) {
         return compound == null ? Set.of() : compound.keySet();
+    }
+
+    /**
+     * Reads a whole number, empty when the field is absent or holds something else.
+     *
+     * <p>Absence is reported rather than defaulted because the callers use these to describe where
+     * something was found, and a missing coordinate has to read as unknown instead of as the origin.
+     */
+    public static OptionalInt getInt(CompoundTag compound, String name) {
+        if (compound == null || name == null || !(compound.get(name) instanceof NumericTag value)) {
+            return OptionalInt.empty();
+        }
+        return OptionalInt.of(value.intValue());
+    }
+
+    /** Reads a fractional number from a list, empty when the index is absent or holds something else. */
+    public static OptionalDouble getDouble(ListTag list, int index) {
+        if (list == null
+                || index < 0
+                || index >= list.size()
+                || !(list.get(index) instanceof NumericTag value)) {
+            return OptionalDouble.empty();
+        }
+        return OptionalDouble.of(value.doubleValue());
     }
 
     public static CompoundTag fromJson(JsonObject json) {

@@ -1,0 +1,28 @@
+WTEM (World Translation Extractor Mod)
+Copyright (c) FengMing
+https://github.com/3093FengMing/wtem_stonecutter
+
+Licensed under the Creative Commons Attribution 4.0 International License
+(CC BY 4.0). See the LICENSE file for the full terms, or
+https://creativecommons.org/licenses/by/4.0/
+
+Commercial use is permitted. Attribution is required.
+
+When you redistribute WTEM, or a modified version of it, keep this notice and
+the LICENSE file with it, and state whether you made changes.
+
+Attribution for extraction output
+---------------------------------
+
+CC BY 4.0 governs WTEM itself. It does not by itself reach the files WTEM
+produces, so the following applies to them as an additional condition of use.
+
+When you distribute the output of a WTEM run -- the language file, the
+extraction report, or the generated companion data packs -- whether on its own
+or inside a world you publish, state that those files were produced by WTEM and
+give the attribution above (author, project URL, license). A line in the release
+notes, the world's description, or a text file inside the save is enough.
+
+This condition covers the generated files only. It makes no claim on the world
+you extracted from, on your own translations of the extracted text, or on
+anything else you distribute alongside them.

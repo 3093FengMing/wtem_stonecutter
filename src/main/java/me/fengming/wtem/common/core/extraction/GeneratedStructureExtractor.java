@@ -51,6 +51,7 @@ public final class GeneratedStructureExtractor {
         String path = relative.substring(0, relative.length() - ".nbt".length());
         String resource = namespace + ":" + path;
         try (var transaction = TranslationContext.beginTransaction();
+                var ignored = TranslationContext.pushLocation(resource);
                 var input = Files.newInputStream(structureFile)) {
             var source = NbtIo.readCompressed(input, NbtAccounter.unlimitedHeap());
             StructureTemplateWHandler.Result result = new StructureTemplateWHandler().process(source);

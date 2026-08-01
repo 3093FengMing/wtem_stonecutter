@@ -1,5 +1,6 @@
 package me.fengming.wtem.common.core.handler;
 
+import static me.fengming.wtem.common.config.ConfigOverride.withSkipped;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -7,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.google.gson.JsonParser;
 import java.util.List;
 import java.util.Map;
+import me.fengming.wtem.common.config.ConfigOverride;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.NbtUtils;
@@ -89,6 +91,27 @@ class EntityWHandlerTest {
                         """
                         {"id":"minecraft:mannequin","description":"{\\"text\\":\\"Statue\\"}"}
                         """));
+    }
+
+    @Test
+    void leavesTheCommandBlockMinecartOutputAloneWhenConfigured() {
+        // The minecart caches its output in the same field a command block does, so the setting
+        // that drops one has to drop the other. Its output is the only text it carries, which
+        // leaves nothing to rewrite once the setting is on.
+        withSkipped(
+                new WtemConfig.Skipped(true, false),
+                () -> {
+                    CompoundTag minecart = nbt("""
+                            {"id":"minecraft:command_block_minecart",
+                             "LastOutput":"{\\"text\\":\\"Done\\"}"}
+                            """);
+
+                    assertFalse(new EntityWHandler().handle(minecart));
+
+                    assertEquals(Map.of(), TranslationContext.snapshot());
+                    assertEquals(
+                            "{\"text\":\"Done\"}", NbtUtils.getString(minecart, "LastOutput"));
+                });
     }
 
     @Test
@@ -198,7 +221,7 @@ class EntityWHandlerTest {
 
     @Test
     void followsTheConfiguredTraversalDepthLimit() {
-        WtemConfig.initialize(
+        ConfigOverride.run(
                 new WtemConfig(
                         Map.of(),
                         Map.of(),
@@ -206,18 +229,17 @@ class EntityWHandlerTest {
                         WtemConfig.KeyNaming.DEFAULT,
                         3,
                         true,
+                        WtemConfig.Skipped.DEFAULT,
                         Map.of(),
-                        WtemConfig.DEFAULT_LANGUAGE_FILE));
-        try {
-            assertTrue(new EntityWHandler().handle(nbt(passengerChain(6))));
+                        WtemConfig.DEFAULT_LANGUAGE_FILE),
+                () -> {
+                    assertTrue(new EntityWHandler().handle(nbt(passengerChain(6))));
 
-            Map<String, String> entries = TranslationContext.snapshot();
-            assertTrue(entries.containsValue("Level2"), entries::toString);
-            assertFalse(entries.containsValue("Level3"), entries::toString);
-            assertEquals(3, entries.size(), entries::toString);
-        } finally {
-            WtemConfig.initialize(WtemConfig.DEFAULT);
-        }
+                    Map<String, String> entries = TranslationContext.snapshot();
+                    assertTrue(entries.containsValue("Level2"), entries::toString);
+                    assertFalse(entries.containsValue("Level3"), entries::toString);
+                    assertEquals(3, entries.size(), entries::toString);
+                });
     }
 
     /** Builds a chain of {@code depth} named zombies, each riding inside the previous one. */

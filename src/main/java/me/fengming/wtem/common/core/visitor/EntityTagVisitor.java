@@ -1,6 +1,8 @@
 package me.fengming.wtem.common.core.visitor;
 
 import java.util.List;
+import java.util.OptionalDouble;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
@@ -30,11 +32,37 @@ public class EntityTagVisitor implements SimpleTagVisitor {
             if (!traversal.entered()) return;
 
             String entityId = ResourceIds.path(NbtUtils.getString(tag, "id"));
-            this.tracker.add(translateEntityText(tag, entityId));
-            visitPassengers(tag);
-            this.tracker.add(visitItems(tag));
-            this.tracker.add(visitTrades(tag));
+            try (var ignored = TranslationContext.pushSubject(describe(tag))) {
+                this.tracker.add(translateEntityText(tag, entityId));
+                visitPassengers(tag);
+                this.tracker.add(visitItems(tag));
+                this.tracker.add(visitTrades(tag));
+            }
         }
+    }
+
+    /**
+     * Names the entity for the extraction report, with its position when it carries one.
+     *
+     * <p>Entity coordinates are fractional and stored as a three-element list, and they are rounded
+     * here because a report row only has to point a translator at the right place. Entities stored on
+     * an item or in a spawner have no position yet, so they are described by type alone.
+     */
+    private static String describe(CompoundTag tag) {
+        String id = NbtUtils.getString(tag, "id");
+        if (id.isBlank()) id = "entity";
+
+        ListTag pos = NbtUtils.getList(tag, "Pos");
+        if (pos.size() < 3) return id;
+
+        StringBuilder description = new StringBuilder(id).append(" (");
+        for (int i = 0; i < 3; i++) {
+            OptionalDouble coordinate = NbtUtils.getDouble(pos, i);
+            if (coordinate.isEmpty()) return id;
+            if (i > 0) description.append(", ");
+            description.append(Math.round(coordinate.getAsDouble()));
+        }
+        return description.append(')').toString();
     }
 
     private static boolean translateEntityText(CompoundTag tag, String entityId) {
@@ -45,7 +73,10 @@ public class EntityTagVisitor implements SimpleTagVisitor {
         if ("text_display".equals(entityId)) {
             tracker.add(translateIndexedComponent(tag, "text", "text_display", "text"));
         }
-        if ("command_block_minecart".equals(entityId)) {
+        // A command block minecart caches its output in the same field a command block does, so the
+        // setting that drops one drops the other: they are the same text for the same reason.
+        if ("command_block_minecart".equals(entityId)
+                && !WtemConfig.active().skipped().commandBlockOutput()) {
             tracker.add(
                     translateIndexedComponent(
                             tag, "LastOutput", "command_block_minecart", "last_output"));
@@ -78,11 +109,13 @@ public class EntityTagVisitor implements SimpleTagVisitor {
     private static boolean visitItems(CompoundTag tag) {
         ItemTagVisitor itemVisitor = new ItemTagVisitor();
 
+        // for 1.21.5+
         CompoundTag equipment = NbtUtils.getCompound(tag, "equipment");
         for (String key : NbtUtils.getKeys(equipment)) {
             NbtUtils.getCompound(equipment, key).accept(itemVisitor);
         }
 
+        // for pre-1.21.5
         for (String field : List.of("Items", "Inventory", "ArmorItems", "HandItems")) {
             NbtUtils.getList(tag, field, Tag.TAG_COMPOUND).accept(itemVisitor);
         }

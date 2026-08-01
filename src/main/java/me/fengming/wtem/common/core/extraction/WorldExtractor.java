@@ -7,6 +7,7 @@ import me.fengming.wtem.common.core.extraction.service.ExtractionProgress;
 import me.fengming.wtem.common.core.extraction.service.ExtractionReport;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 import me.fengming.wtem.common.core.extraction.service.ExtractionStatus;
+import me.fengming.wtem.common.core.extraction.table.ExtractionManifest;
 import me.fengming.wtem.common.core.handler.AbstractWHandler;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.core.handler.EntityWHandler;
@@ -218,7 +219,8 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             String outputPackId = sanitizePackId(packId) + "_" + shortHash(packId) + "_wtem";
             Path outputRoot = datapackDir.resolve(outputPackId);
             Path staging = null;
-            try (var transaction = TranslationContext.beginTransaction()) {
+            try (var transaction = TranslationContext.beginTransaction();
+                    var ignored = TranslationContext.pushLocation(packId)) {
                 staging = DirectoryPublisher.createStagingDirectory(outputRoot);
                 Path stagingRoot = staging;
                 int modifiedResources =
@@ -353,10 +355,14 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         CustomBossEvents events = this.overworldSavedDataStorage.computeIfAbsent(CustomBossEvents.TYPE);
         ChangeTracker tracker = new ChangeTracker();
         for (var event : events.getEvents()) {
-            var original = event.getName();
-            var translated = TranslationUtils.translateLiteral(original);
-            if (!tracker.add(translated != original)) continue;
-            event.setName(translated);
+            // A boss bar has no position, so its own id is the only thing that identifies it, and
+            // it is what the /bossbar command takes as an argument.
+            try (var ignored = TranslationContext.pushSubject(event.customId().toString())) {
+                var original = event.getName();
+                var translated = TranslationUtils.translateLiteral(original);
+                if (!tracker.add(translated != original)) continue;
+                event.setName(translated);
+            }
         }
         if (tracker.isChanged()) {
             events.setDirty();
@@ -368,9 +374,12 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         if (bossBarTag == null) return;
         ChangeTracker tracker = new ChangeTracker();
         for (String key : NbtUtils.getKeys(bossBarTag)) {
-            tracker.add(
-                    TranslationUtils.translateNbtComponent(
-                            NbtUtils.getCompound(bossBarTag, key), "Name"));
+            // The map key is the bar id, which is what the /bossbar command takes as an argument.
+            try (var ignored = TranslationContext.pushSubject(key)) {
+                tracker.add(
+                        TranslationUtils.translateNbtComponent(
+                                NbtUtils.getCompound(bossBarTag, key), "Name"));
+            }
         }
         if (!tracker.isChanged()) return;
         worldData.setCustomBossEvents(bossBarTag);
@@ -518,7 +527,11 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     private void runStage(WtemConfig.Stage stage, Runnable extraction) {
         if (shouldStop() || !this.config.isEnabled(stage)) return;
-        extraction.run();
+        // Every row in the report is attributed to the stage that produced it, so a translator
+        // reading the file knows whether to look in a chunk, a data pack, or the scoreboard.
+        try (var ignored = TranslationContext.pushSource(stage.id())) {
+            extraction.run();
+        }
     }
 
     private void beginRun() {
@@ -542,6 +555,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         }
 
         exportLanguage(languageOutput());
+        exportManifest();
         this.session.complete();
         logDiagnostics();
     }
@@ -572,12 +586,37 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             this.session.diagnostics().record("language", languageOutput().toString(), exception);
             Wtem.LOGGER.error("Failed to publish partial language catalog", exception);
         }
+        exportManifest();
+    }
+
+    /**
+     * Writes the extraction report beside the catalog.
+     *
+     * <p>The report is a companion the game never reads, so failing to write it must not fail a run
+     * that otherwise succeeded: the world has already been rewritten by this point and the catalog is
+     * already on disk. The failure is recorded so it still shows up in the report screen.
+     */
+    private void exportManifest() {
+        Path file = manifestOutput();
+        try {
+            ResourceIo.writeString(
+                    file, ExtractionManifest.render(TranslationContext.records()));
+        } catch (RuntimeException exception) {
+            this.session.diagnostics().record("manifest", file.toString(), exception);
+            Wtem.LOGGER.error("Failed to write the extraction report", exception);
+        }
     }
 
     private Path languageOutput() {
-        return this.levelStorage
-                .getLevelPath(LevelResource.ROOT)
-                .resolve(this.config.languageFile());
+        return levelRoot().resolve(this.config.languageFile());
+    }
+
+    private Path manifestOutput() {
+        return levelRoot().resolve(ExtractionManifest.fileName(this.config.languageFile()));
+    }
+
+    private Path levelRoot() {
+        return this.levelStorage.getLevelPath(LevelResource.ROOT);
     }
 
     public static void exportLanguage(Path file) {
@@ -639,8 +678,19 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         private boolean process(SimpleRegionStorage storage, ChunkPos chunkPos, CompoundTag compoundTag) {
             ChangeTracker tracker = new ChangeTracker();
             ListTag list = NbtUtils.getList(compoundTag, handler.getName(), Tag.TAG_COMPOUND);
-            for (int i = 0; i < list.size(); i++) {
-                tracker.add(this.handler.handle(NbtUtils.getCompound(list, i)));
+            // The storage knows its own dimension on every supported version, unlike the upgrader,
+            // whose dimension key is private. Block entities carry absolute coordinates already, so
+            // the chunk is only recorded to point at the region file the data lives in. ChunkPos
+            // became a record in 26.1, so its own toString is used instead of its coordinates: it
+            // renders '[x, z]' on every supported version.
+            try (var ignored =
+                    TranslationContext.pushLocation(
+                            ResourceIds.key(storage.storageInfo().dimension())
+                                    + " chunk "
+                                    + chunkPos)) {
+                for (int i = 0; i < list.size(); i++) {
+                    tracker.add(this.handler.handle(NbtUtils.getCompound(list, i)));
+                }
             }
             if (!tracker.isChanged()) return false;
             if (this.previousWriteFuture != null) this.previousWriteFuture.join();

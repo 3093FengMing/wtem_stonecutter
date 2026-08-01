@@ -1,5 +1,6 @@
 package me.fengming.wtem.common.core.visitor;
 
+import static me.fengming.wtem.common.config.ConfigOverride.withSkipped;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -7,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.google.gson.JsonParser;
 import java.util.List;
 import java.util.Map;
+import me.fengming.wtem.common.config.ConfigOverride;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.NbtUtils;
@@ -20,6 +22,17 @@ import org.junit.jupiter.api.Test;
 
 /** Boundary coverage for the data components carried by item stacks in a save file. */
 class ItemTagVisitorTest {
+    /** A book whose one page carries both the original text and its chat-filtered form. */
+    private static final String FILTERED_BOOK =
+            """
+            {"id":"minecraft:written_book","components":{
+              "minecraft:custom_name":"{\\"text\\":\\"Diary\\"}",
+              "minecraft:written_book_content":{
+                "title":{"raw":"Diary"},
+                "pages":[{"raw":"{\\"text\\":\\"P0\\"}",
+                          "filtered":"{\\"text\\":\\"P0f\\"}"}]}}}
+            """;
+
     @BeforeAll
     static void bootstrapMinecraft() {
         SharedConstants.tryDetectVersion();
@@ -104,25 +117,25 @@ class ItemTagVisitorTest {
     }
 
     @Test
-    void translatesRawBookPagesAndLeavesFilteredOnesAlone() {
-        // The filtered variant only exists on servers that enable chat filtering, and a translated
-        // page would defeat the filter, so it is deliberately left untouched.
-        Map<String, String> entries =
-                visit(
-                        """
-                        {"id":"minecraft:written_book","components":{
-                          "minecraft:custom_name":"{\\"text\\":\\"Diary\\"}",
-                          "minecraft:written_book_content":{
-                            "title":{"raw":"Diary"},
-                            "pages":[{"raw":"{\\"text\\":\\"P0\\"}",
-                                      "filtered":"{\\"text\\":\\"P0f\\"}"}]}}}
-                        """);
+    void translatesBothTheRawAndTheFilteredFormOfABookPage() {
+        Map<String, String> entries = visit(FILTERED_BOOK);
 
         assertEquals(
                 Map.of(
                         "item.written_book.1.name", "Diary",
-                        "book.1.content.page0", "P0"),
+                        "book.1.content.page0", "P0",
+                        "book.1.content.page0.filtered", "P0f"),
                 entries);
+    }
+
+    @Test
+    void leavesFilteredBookPagesAloneWhenConfigured() {
+        withSkipped(new WtemConfig.Skipped(false, true), () ->
+                assertEquals(
+                        Map.of(
+                                "item.written_book.1.name", "Diary",
+                                "book.1.content.page0", "P0"),
+                        visit(FILTERED_BOOK)));
     }
 
     @Test
@@ -262,7 +275,7 @@ class ItemTagVisitorTest {
 
     @Test
     void extendsTheItemKeyForANestedBlockEntityWhenConfigured() {
-        WtemConfig.initialize(
+        ConfigOverride.run(
                 new WtemConfig(
                         Map.of(),
                         Map.of(),
@@ -270,21 +283,18 @@ class ItemTagVisitorTest {
                         WtemConfig.KeyNaming.DEFAULT,
                         WtemConfig.DEFAULT_NBT_MAX_DEPTH,
                         false,
+                        WtemConfig.Skipped.DEFAULT,
                         Map.of(),
-                        WtemConfig.DEFAULT_LANGUAGE_FILE));
-        try {
-            assertEquals(
-                    Map.of(
-                            "item.shulker_box.1.container.shulker_box.1.name", "Loot"),
-                    visit(
-                            """
-                            {"id":"minecraft:shulker_box","components":{
-                              "minecraft:block_entity_data":{"id":"minecraft:shulker_box",
-                                "CustomName":"{\\"text\\":\\"Loot\\"}"}}}
-                            """));
-        } finally {
-            WtemConfig.initialize(WtemConfig.DEFAULT);
-        }
+                        WtemConfig.DEFAULT_LANGUAGE_FILE),
+                () ->
+                        assertEquals(
+                                Map.of("item.shulker_box.1.container.shulker_box.1.name", "Loot"),
+                                visit(
+                                        """
+                                        {"id":"minecraft:shulker_box","components":{
+                                          "minecraft:block_entity_data":{"id":"minecraft:shulker_box",
+                                            "CustomName":"{\\"text\\":\\"Loot\\"}"}}}
+                                        """)));
     }
 
     @Test

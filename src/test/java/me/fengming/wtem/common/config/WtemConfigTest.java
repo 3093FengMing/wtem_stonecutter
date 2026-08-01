@@ -30,6 +30,7 @@ class WtemConfigTest {
         assertEquals(WtemConfig.KeyNaming.DEFAULT, config.keyNaming());
         assertEquals(WtemConfig.DEFAULT_NBT_MAX_DEPTH, config.nbtMaxDepth());
         assertTrue(config.rebuildNestedKeys());
+        assertEquals(WtemConfig.Skipped.DEFAULT, config.skipped());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, config.languageFile());
     }
 
@@ -111,6 +112,22 @@ class WtemConfigTest {
         assertFalse(parse("{\"rebuild_nested_keys\": false}").rebuildNestedKeys());
         assertTrue(parse("{\"rebuild_nested_keys\": true}").rebuildNestedKeys());
         assertTrue(parse("{\"rebuild_nested_keys\": \"false\"}").rebuildNestedKeys());
+    }
+
+    @Test
+    void readsWhichTranslatableTextToLeaveAlone() {
+        // Both default to off, so an untouched file keeps extracting text that was extracted before
+        // the settings existed.
+        assertEquals(new WtemConfig.Skipped(false, false), parse("{}").skipped());
+        assertEquals(
+                new WtemConfig.Skipped(true, false),
+                parse("{\"skipped\": {\"command_block_output\": true}}").skipped());
+        assertEquals(
+                new WtemConfig.Skipped(false, true),
+                parse("{\"skipped\": {\"filtered_text\": true}}").skipped());
+        assertEquals(
+                WtemConfig.Skipped.DEFAULT,
+                parse("{\"skipped\": {\"filtered_text\": \"true\"}}").skipped());
     }
 
     @Test
@@ -202,6 +219,7 @@ class WtemConfigTest {
         assertEquals(WtemConfig.KeyNaming.DEFAULT, reloaded.keyNaming());
         assertEquals(WtemConfig.DEFAULT_NBT_MAX_DEPTH, reloaded.nbtMaxDepth());
         assertTrue(reloaded.rebuildNestedKeys());
+        assertEquals(WtemConfig.Skipped.DEFAULT, reloaded.skipped());
         assertEquals(WtemConfig.DEFAULT_BUILTIN_ENTRIES, reloaded.builtinEntries());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, reloaded.languageFile());
     }

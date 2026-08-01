@@ -75,7 +75,12 @@ public class ItemTagVisitor implements SimpleTagVisitor {
             String itemId = ResourceIds.path(NbtUtils.getString(item, "id"));
             if (itemId.isBlank()) return;
 
-            visitKeyedPatch("item." + itemId, NbtUtils.getCompound(item, "components"));
+            // The item is appended to whatever holds it, so a sword in a shulker box in a chest reads
+            // as the whole chain. That path is what a translator needs to find the stack again.
+            try (var ignored =
+                    TranslationContext.pushSubject(NbtUtils.getString(item, "id"))) {
+                visitKeyedPatch("item." + itemId, NbtUtils.getCompound(item, "components"));
+            }
         }
     }
 
@@ -156,14 +161,22 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         ChangeTracker tracker = new ChangeTracker();
 
         try (var ignored = TranslationContext.pushKey("book." + bookIndex)) {
+            boolean skipFiltered = WtemConfig.active().skipped().filteredText();
             ListTag pages = NbtUtils.getList(book, "pages", Tag.TAG_COMPOUND);
             for (int i = 0; i < pages.size(); i++) {
                 CompoundTag page = NbtUtils.getCompound(pages, i);
                 tracker.add(
                         TranslationUtils.translateNbtComponent(page, "raw", "content.page" + i));
-                // almost never used
-                // tracker.add(
-                //        TranslationUtils.translateNbtComponent(page, "filtered", "content.page" + i + ".filtered"));
+                // The filtered page is the same page with the words a server's chat filter objects
+                // to blanked out. Only a filtered server writes one, so the field is usually absent
+                // and this usually does nothing, but where it is present leaving it in the original
+                // language would show untranslated text to exactly the players who cannot see the
+                // page beside it. Signs make the same choice for the same reason.
+                if (!skipFiltered) {
+                    tracker.add(
+                            TranslationUtils.translateNbtComponent(
+                                    page, "filtered", "content.page" + i + ".filtered"));
+                }
             }
 
             if (!components.contains("minecraft:custom_name")) {
