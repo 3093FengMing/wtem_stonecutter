@@ -183,7 +183,6 @@ publishMods {
             minecraftVersions.addAll(compatibleVersions)
             // fabric.mod.json declares `"environment": "client"`
             environment = ModrinthEnvironment.CLIENT_ONLY
-            requires("fabric-api")
             additionalFile(loomx.modSourcesJar.flatMap { it.archiveFile }) {
                 type = ModrinthApi.AdditionalFileType.SOURCES_JAR
             }
@@ -199,7 +198,6 @@ publishMods {
             javaVersions.add(requiredJava)
             client = true
             server = false
-            requires("fabric-api")
         }
     }
 
