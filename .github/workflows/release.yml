@@ -31,7 +31,7 @@ jobs:
 
       # Every version node is published from this one job, so both toolchains have to be present.
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v5.6.0
         with:
           distribution: temurin
           java-version: |
