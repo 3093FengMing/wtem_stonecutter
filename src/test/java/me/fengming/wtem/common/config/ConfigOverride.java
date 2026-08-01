@@ -23,6 +23,7 @@ public final class ConfigOverride {
                         defaults.nbtMaxDepth(),
                         defaults.rebuildNestedKeys(),
                         skipped,
+                        defaults.skippedPaths(),
                         defaults.builtinEntries(),
                         defaults.languageFile()),
                 body);

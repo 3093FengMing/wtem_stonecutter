@@ -256,7 +256,8 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                                 handler.getPath(),
                                 (id, supplier) ->
                                         {
-                                            if (handler.accepts(id)) {
+                                            if (handler.accepts(id)
+                                                    && !this.config.isPathSkipped(id.getPath())) {
                                                 resources.put(
                                                         id.toString(),
                                                         new PackResource(id, supplier));

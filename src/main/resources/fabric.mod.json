@@ -3,6 +3,7 @@
   "id": "wtem",
   "version": "${version}",
   "name": "${name}",
+  "icon": "assets/wtem/icon.png",
   "description": "Extracts literal text from a Minecraft world and its data packs into translation keys.",
   "authors": [
     "FengMing"

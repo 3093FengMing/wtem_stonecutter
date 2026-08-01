@@ -1,13 +1,16 @@
 package me.fengming.wtem.common.config;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
@@ -32,6 +35,8 @@ import me.fengming.wtem.common.util.ResourceIo;
  * @param rebuildNestedKeys whether data nested inside an item restarts its key instead of extending
  *     the key of the item that carries it
  * @param skipped text that is translatable but that a pack may want left alone
+ * @param skippedPaths data-pack directories left unread, so their contents are neither extracted nor
+ *     copied into the generated pack
  * @param builtinEntries entries the catalog starts with, which extracted text reuses instead of
  *     allocating a key of its own
  * @param languageFile name of the catalog written to the world directory
@@ -45,6 +50,7 @@ public record WtemConfig(
         int nbtMaxDepth,
         boolean rebuildNestedKeys,
         Skipped skipped,
+        List<String> skippedPaths,
         Map<String, String> builtinEntries,
         String languageFile) {
 
@@ -53,12 +59,12 @@ public record WtemConfig(
     public static final int DEFAULT_NBT_MAX_DEPTH = 32;
 
     /**
+     * Datapack directories skipped by default.
+     */
+    public static final List<String> DEFAULT_SKIPPED_PATHS = List.of("function/animated_java/");
+
+    /**
      * Entries every catalog starts with.
-     *
-     * <p>A world is full of text that carries no meaning to translate: an empty sign line, a single
-     * digit on a scoreboard. Without a shared entry each occurrence would take a key of its own and
-     * bury the text that does need translating. Seeding the catalog gives that text one key up front,
-     * so it costs one line no matter how often it appears.
      */
     public static final Map<String, String> DEFAULT_BUILTIN_ENTRIES = defaultBuiltinEntries();
 
@@ -71,6 +77,7 @@ public record WtemConfig(
                     DEFAULT_NBT_MAX_DEPTH,
                     true,
                     Skipped.DEFAULT,
+                    DEFAULT_SKIPPED_PATHS,
                     DEFAULT_BUILTIN_ENTRIES,
                     DEFAULT_LANGUAGE_FILE);
 
@@ -81,6 +88,7 @@ public record WtemConfig(
         // Insertion order is kept for the string-keyed maps: it decides the order of the generated
         // file, and for the built-in entries it also decides which key wins when two share a value.
         resources = ordered(resources);
+        skippedPaths = List.copyOf(skippedPaths);
         builtinEntries = ordered(builtinEntries);
         // A non-positive limit would stop traversal before the outermost tag is read, which silently
         // extracts nothing at all. Treat it the same way as a malformed value.
@@ -178,6 +186,7 @@ public record WtemConfig(
                 readInt(json, "nbt_max_depth").orElse(DEFAULT_NBT_MAX_DEPTH),
                 readBoolean(json, "rebuild_nested_keys").orElse(DEFAULT.rebuildNestedKeys()),
                 Skipped.fromJson(object(json, "skipped")),
+                skippedPaths(json),
                 builtinEntries(json),
                 languageFile(json));
     }
@@ -212,6 +221,9 @@ public record WtemConfig(
         json.addProperty("nbt_max_depth", this.nbtMaxDepth);
         json.addProperty("rebuild_nested_keys", this.rebuildNestedKeys);
         json.add("skipped", this.skipped.toJson());
+        JsonArray skippedPathJson = new JsonArray();
+        this.skippedPaths.forEach(skippedPathJson::add);
+        json.add("skipped_paths", skippedPathJson);
         json.add("builtin_entries", builtinJson);
         json.addProperty("language_file", this.languageFile);
         return json;
@@ -228,6 +240,55 @@ public record WtemConfig(
      */
     public boolean isResourceEnabled(String directory) {
         return this.resources.getOrDefault(directory, true);
+    }
+
+    /**
+     * Reports whether a data-pack resource lies under a skipped directory.
+     *
+     * <p>A skipped resource is left out of the generated pack entirely rather than copied through
+     * unchanged, because the pack it came from is still loaded alongside and already supplies it.
+     *
+     * @param path the resource path within its namespace, including the registry directory, such as
+     *     {@code function/animated_java/}
+     */
+    public boolean isPathSkipped(String path) {
+        if (path == null || this.skippedPaths.isEmpty()) return false;
+
+        for (String skipped : this.skippedPaths) {
+            // Matching on the segment boundary keeps 'function/animated' from also skipping
+            // 'function/animated_java', which a bare prefix test would.
+            if (path.equals(skipped)) return true;
+            if (path.startsWith(skipped) && path.charAt(skipped.length()) == '/') return true;
+        }
+        return false;
+    }
+
+    /**
+     * Reads the skipped data-pack directories.
+     *
+     * <p>An absent section keeps the built-in list, but an empty one switches it off, which is the
+     * only way a user can ask for a directory the mod skips by default to be extracted after all.
+     */
+    private static List<String> skippedPaths(JsonObject json) {
+        JsonElement value = json.get("skipped_paths");
+        if (value == null || !value.isJsonArray()) return DEFAULT_SKIPPED_PATHS;
+
+        List<String> paths = new ArrayList<>();
+        for (JsonElement element : value.getAsJsonArray()) {
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+                Wtem.LOGGER.warn("Ignoring skipped_paths entry {}: expected a string", element);
+                continue;
+            }
+
+            // Both spellings of a directory mean the same thing to a reader, so both are accepted and
+            // stored in the one form the matcher compares against.
+            String path = element.getAsString().replace('\\', '/');
+            while (path.startsWith("/")) path = path.substring(1);
+            while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
+            if (path.isBlank()) continue;
+            paths.add(path);
+        }
+        return List.copyOf(paths);
     }
 
     /**
