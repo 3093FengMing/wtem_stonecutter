@@ -123,7 +123,9 @@ The first launch writes a default config to `config/wtem.json`, with every optio
     "command_block_output": false,
     "filtered_text": false
   },
-  "language_file": "en_us.json",
+  "skipped_paths": [
+    "function/animated_java/"
+  ],
   "builtin_entries": {
     "wtem.blank": "",
     "wtem.space": " ",
@@ -137,7 +139,8 @@ The first launch writes a default config to `config/wtem.json`, with every optio
     "wtem.7": "7",
     "wtem.8": "8",
     "wtem.9": "9"
-  }
+  },
+  "language_file": "en_us.json"
 }
 ```
 
@@ -146,10 +149,12 @@ The first launch writes a default config to `config/wtem.json`, with every optio
 - `key_reuse`: whether identical text reuses an existing translation key. `default` is the global policy and `overrides` overrides it by key prefix, with the longest matching prefix winning. To translate the same text separately in different places, set the matching prefix to `false`, for example `{"datapack.": false}` gives data pack text its own keys.
 - `key_naming`: how translation keys are named. See below.
 - `nbt_max_depth`: the recursion limit for NBT extraction, which keeps mutually nested items and the like from exhausting the stack. Each nested item, entity or block entity costs one level, and data past the limit is left as it is. A value below 1 is treated as the default.
-- `rebuild_nested_keys`: whether `block_entity_data` on an item names itself from scratch. `true` by default, so, reuse aside, the same wooden sword gets the same key wherever it is. With `false` the key looks like `item.shulker_box.1.container.wooden_sword.name`.
+- `rebuild_nested_keys`: whether `block_entity_data` on an item names itself from scratch. `true` by default, so, reuse aside, the same wooden sword in different shulker boxes gets the same key wherever it is. With `false` the key looks like `item.shulker_box.1.container.wooden_sword.name`.
 - `skipped`: text that can be translated but usually does not need to be. See below.
-- `language_file`: the name of the language file written into the world directory. Only a plain file name is accepted; a name containing a path separator or not ending in `.json` is ignored.
+- `skipped_paths`: text that will not be extracted in specific paths of datapacks.
 - `builtin_entries`: entries seeded into the language file. Extracted text that matches one of them reuses its key instead of taking a key of its own. The defaults seed the empty string, a space and 0~9: text with no translation value that nonetheless shows up constantly (blank sign lines, numbers on a scoreboard), which after seeding takes one line each. An empty object `{}` seeds nothing; deleting the whole option keeps the defaults.
+- `language_file`: the name of the language file written into the world directory. Only a plain file name is accepted; a name containing a path separator or not ending in `.json` is ignored.
+
 
 ### Skipped text
 
