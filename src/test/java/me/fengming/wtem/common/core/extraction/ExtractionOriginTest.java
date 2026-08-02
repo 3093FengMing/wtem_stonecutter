@@ -3,7 +3,7 @@ package me.fengming.wtem.common.core.extraction;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
-import me.fengming.wtem.common.core.extraction.table.ExtractionOrigin;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
 import org.junit.jupiter.api.Test;
 
 /** Boundary coverage for the place description attached to each extracted entry. */

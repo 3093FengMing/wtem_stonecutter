@@ -95,8 +95,6 @@ tasks {
     }
 
     processResources {
-        // CC BY requires the license notice to travel with the work, so the jar carries the text
-        // itself rather than only the SPDX id in fabric.mod.json.
         from(rootProject.file("LICENSE"), rootProject.file("NOTICE"))
 
         fun MutableMap<String, String>.register(key: String, property: String) {
@@ -105,8 +103,8 @@ tasks {
             set(key, value)
         }
 
-        val mixin = when {
-            stonecutter.eval(stonecutter.current.version, ">=26.1") -> "mixins.wtem.26.1.json"
+        val mixins = when {
+            stonecutter.eval(stonecutter.current.version, ">=26.1") -> "mixins.26.1.wtem.json"
             else -> "mixins.wtem.json"
         }
 
@@ -115,7 +113,7 @@ tasks {
             register("name", "mod.name")
             register("version", "mod.version")
             register("minecraft", "mod.mc_compat")
-            // register("mixin", mixin)
+            set("mixins", mixins)
         }
 
         filesMatching("fabric.mod.json") { expand(props) }

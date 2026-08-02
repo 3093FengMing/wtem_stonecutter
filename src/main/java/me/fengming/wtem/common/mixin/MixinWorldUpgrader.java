@@ -11,11 +11,8 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  */
 @Mixin(WorldUpgrader.class)
 public class MixinWorldUpgrader {
-    @Redirect(
-            method = "<init>",
-            at = @At(value = "INVOKE", target = "Ljava/lang/Thread;start()V"),
-            require = 0)
-    private void wtem$startThread(Thread thread) {
+    @Redirect(method = "<init>",at = @At(value = "INVOKE", target = "Ljava/lang/Thread;start()V"), require = 0)
+    private void avoidDirectlyStartThread(Thread thread) {
         if ((Object) this instanceof WorldExtractor) return;
         thread.start();
     }

@@ -28,6 +28,17 @@ class EntityWHandlerTest {
     static void bootstrapMinecraft() {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
+        WtemConfig.initialize(new WtemConfig(
+            WtemConfig.DEFAULT.stages(),
+            WtemConfig.DEFAULT.resources(),
+            WtemConfig.DEFAULT.keyReuse(),
+            WtemConfig.DEFAULT.keyNaming(),
+            WtemConfig.DEFAULT.nbtMaxDepth(),
+            WtemConfig.DEFAULT.rebuildNestedKeys(),
+            new WtemConfig.Skipped(false, true),
+            WtemConfig.DEFAULT.skippedPaths(),
+            WtemConfig.DEFAULT.builtinEntries(),
+            WtemConfig.DEFAULT.languageFile()));
     }
 
     @BeforeEach
@@ -79,18 +90,20 @@ class EntityWHandlerTest {
                         {"id":"minecraft:text_display","text":"{\\"text\\":\\"Hint\\"}"}
                         """));
         assertEquals(
-                Map.of("command_block_minecart.1.last_output", "Done"),
-                extractFresh(
-                        """
-                        {"id":"minecraft:command_block_minecart",
-                         "LastOutput":"{\\"text\\":\\"Done\\"}"}
-                        """));
-        assertEquals(
                 Map.of("mannequin.1.description", "Statue"),
                 extractFresh(
                         """
                         {"id":"minecraft:mannequin","description":"{\\"text\\":\\"Statue\\"}"}
                         """));
+        withSkipped(new WtemConfig.Skipped(false, true), () -> {
+            assertEquals(
+                Map.of("command_block_minecart.1.last_output", "Done"),
+                extractFresh(
+                    """
+                    {"id":"minecraft:command_block_minecart",
+                     "LastOutput":"{\\"text\\":\\"Done\\"}"}
+                    """));
+        });
     }
 
     @Test

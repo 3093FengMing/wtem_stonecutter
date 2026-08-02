@@ -12,8 +12,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import me.fengming.wtem.common.config.WtemConfig;
-import me.fengming.wtem.common.core.extraction.table.ExtractionOrigin;
-import me.fengming.wtem.common.core.extraction.table.ExtractionRecord;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionRecord;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

@@ -118,14 +118,16 @@ class ItemTagVisitorTest {
 
     @Test
     void translatesBothTheRawAndTheFilteredFormOfABookPage() {
-        Map<String, String> entries = visit(FILTERED_BOOK);
+        withSkipped(new WtemConfig.Skipped(true, false), () ->{
+            Map<String, String> entries = visit(FILTERED_BOOK);
 
-        assertEquals(
+            assertEquals(
                 Map.of(
-                        "item.written_book.1.name", "Diary",
-                        "book.1.content.page0", "P0",
-                        "book.1.content.page0.filtered", "P0f"),
+                    "item.written_book.1.name", "Diary",
+                    "book.1.content.page0", "P0",
+                    "book.1.content.page0.filtered", "P0f"),
                 entries);
+        });
     }
 
     @Test

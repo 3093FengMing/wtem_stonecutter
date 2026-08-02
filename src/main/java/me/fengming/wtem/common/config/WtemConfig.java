@@ -394,7 +394,7 @@ public record WtemConfig(
      *     configured write it, and it is the same sentence as the text beside it.
      */
     public record Skipped(boolean commandBlockOutput, boolean filteredText) {
-        public static final Skipped DEFAULT = new Skipped(false, false);
+        public static final Skipped DEFAULT = new Skipped(true, true);
 
         static Skipped fromJson(JsonObject json) {
             return new Skipped(
@@ -422,7 +422,7 @@ public record WtemConfig(
      * @param overrides per-key-prefix policies, such as {@code datapack.} or {@code item.}
      */
     public record KeyReuse(boolean byDefault, Map<String, Boolean> overrides) {
-        public static final KeyReuse DEFAULT = new KeyReuse(true, Map.of());
+        public static final KeyReuse DEFAULT = new KeyReuse(true, Map.of("sign.", false));
 
         public KeyReuse {
             overrides = Map.copyOf(overrides);

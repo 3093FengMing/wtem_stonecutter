@@ -1,4 +1,4 @@
-package me.fengming.wtem.common.core.extraction.table;
+package me.fengming.wtem.common.core.extraction.manifest;
 
 /**
  * Where a piece of extracted text was found, in terms of the world rather than the language key.

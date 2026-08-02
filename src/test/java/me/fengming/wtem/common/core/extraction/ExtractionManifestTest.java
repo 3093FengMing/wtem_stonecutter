@@ -5,9 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
-import me.fengming.wtem.common.core.extraction.table.ExtractionManifest;
-import me.fengming.wtem.common.core.extraction.table.ExtractionOrigin;
-import me.fengming.wtem.common.core.extraction.table.ExtractionRecord;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionManifest;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionRecord;
 import org.junit.jupiter.api.Test;
 
 /**

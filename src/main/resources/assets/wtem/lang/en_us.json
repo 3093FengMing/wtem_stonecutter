@@ -1,6 +1,7 @@
 {
   "gui.wtem.extract": "Extract",
   "gui.wtem.main.warn": "Warning!",
+  "gui.wtem.main.warn.text": "Extracting may damage the save and cause irreversible loss. Continuing will make a backup of the save and then start extraction.\nConfirm again whether to continue. You can still cancel in the next step.",
   "gui.wtem.main.extraction.working": "Extracting...",
   "gui.wtem.main.extraction.finished": "Finished extracting",
   "gui.wtem.main.title": "World Translation Extractor",

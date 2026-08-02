@@ -118,13 +118,13 @@ class WtemConfigTest {
     void readsWhichTranslatableTextToLeaveAlone() {
         // Both default to off, so an untouched file keeps extracting text that was extracted before
         // the settings existed.
-        assertEquals(new WtemConfig.Skipped(false, false), parse("{}").skipped());
-        assertEquals(
-                new WtemConfig.Skipped(true, false),
-                parse("{\"skipped\": {\"command_block_output\": true}}").skipped());
+        assertEquals(new WtemConfig.Skipped(true, true), parse("{}").skipped());
         assertEquals(
                 new WtemConfig.Skipped(false, true),
-                parse("{\"skipped\": {\"filtered_text\": true}}").skipped());
+                parse("{\"skipped\": {\"command_block_output\": false}}").skipped());
+        assertEquals(
+                new WtemConfig.Skipped(true, false),
+                parse("{\"skipped\": {\"filtered_text\": false}}").skipped());
         assertEquals(
                 WtemConfig.Skipped.DEFAULT,
                 parse("{\"skipped\": {\"filtered_text\": \"true\"}}").skipped());

@@ -47,8 +47,7 @@ stonecutter parameters {
             replace(".location()", ".identifier()")
         }
 
-        // 1.21.5 turned the primitive tags into records and renamed the key accessor, so the NBT
-        // rename boundary sits there rather than at the 1.21.11 mapping switch.
+        // 1.21.5 turned the primitive tags into records and renamed the key accessor
         string(current.parsed >= "1.21.5", "nbt_api") {
             replace(".getAsString()", ".value()")
             replace(".getAllKeys()", ".keySet()")

@@ -1,6 +1,7 @@
 {
   "gui.wtem.extract": "提取",
   "gui.wtem.main.warn": "警告！",
+  "gui.wtem.main.warn.text": "提取可能会损害存档，并造成不可挽回的损失。继续会备份存档，并进行提取。\n请再次确认是否继续，下一步你仍可以取消。",
   "gui.wtem.main.extraction.working": "提取中...",
   "gui.wtem.main.extraction.finished": "提取完成",
   "gui.wtem.main.title": "世界翻译提取器",

@@ -10,8 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import me.fengming.wtem.common.config.WtemConfig;
-import me.fengming.wtem.common.core.extraction.table.ExtractionOrigin;
-import me.fengming.wtem.common.core.extraction.table.ExtractionRecord;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionRecord;
 
 /**
  * @author FengMing
@@ -68,6 +68,13 @@ public final class TranslationContext {
      */
     public static String addEntry(String value) {
         State state = state();
+
+        var builtinEntries = WtemConfig.active().builtinEntries();
+        if (builtinEntries.containsValue(value)) {
+            // Can guarantee that it is definitely from the built-in entries
+            return state.textToKey.get(value);
+        }
+
         String path = currentPath();
         boolean reuse = !state.keepDuplicates && state.keyReuse.allows(path);
         if (reuse) {

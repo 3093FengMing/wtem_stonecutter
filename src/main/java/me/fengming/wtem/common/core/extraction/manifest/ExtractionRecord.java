@@ -1,4 +1,4 @@
-package me.fengming.wtem.common.core.extraction.table;
+package me.fengming.wtem.common.core.extraction.manifest;
 
 /**
  * One occurrence of extracted text, with the key it was given and where it was found.

@@ -29,11 +29,6 @@ public abstract class MixinEditWorldScreen extends Screen {
     @Shadow @Final private LevelStorageSource.LevelStorageAccess levelAccess;
     @Shadow @Final private BooleanConsumer callback;
 
-    @Unique private static final Component WTEM_EXTRACT = Component.translatable("gui.wtem.extract");
-
-    @Unique
-    private static final Component WTEM_MAIN_WARN = Component.translatable("gui.wtem.main.warn");
-
     protected MixinEditWorldScreen(Component component) {
         super(component);
     }
@@ -42,7 +37,7 @@ public abstract class MixinEditWorldScreen extends Screen {
     private void onInit(CallbackInfo ci) {
         this.layout.addChild(
                 Button.builder(
-                                WTEM_EXTRACT,
+                        Component.translatable("gui.wtem.extract"),
                                 button ->
                                         wtem$setScreen(
                                                 new BackupConfirmScreen(
@@ -56,8 +51,8 @@ public abstract class MixinEditWorldScreen extends Screen {
                                                                             minecraft.getFixerUpper(),
                                                                             levelAccess));
                                                         },
-                                                        WTEM_MAIN_WARN,
-                                                        WTEM_MAIN_WARN,
+                                                        Component.translatable("gui.wtem.main.warn"),
+                                                        Component.translatable("gui.wtem.main.warn.text"),
                                                         //? if >=1.21.4
                                                         CommonComponents.GUI_CONTINUE,
                                                         false)))

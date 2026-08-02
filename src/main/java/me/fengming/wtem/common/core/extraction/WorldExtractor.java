@@ -7,7 +7,7 @@ import me.fengming.wtem.common.core.extraction.service.ExtractionProgress;
 import me.fengming.wtem.common.core.extraction.service.ExtractionReport;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 import me.fengming.wtem.common.core.extraction.service.ExtractionStatus;
-import me.fengming.wtem.common.core.extraction.table.ExtractionManifest;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionManifest;
 import me.fengming.wtem.common.core.handler.AbstractWHandler;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.core.handler.EntityWHandler;
@@ -655,7 +655,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         }
     }
 
-    class ChunkExtractor extends RegionStorageUpgrader {
+    public class ChunkExtractor extends RegionStorageUpgrader {
         private final AbstractWHandler<CompoundTag> handler;
 
         protected ChunkExtractor(AbstractWHandler<CompoundTag> handler, DataFixTypes type, String folderName/*?if >=26.1 >>')'*/, int previousCopiesFileAmounts) {
@@ -680,18 +680,13 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         }
 
         private boolean process(SimpleRegionStorage storage, ChunkPos chunkPos, CompoundTag compoundTag) {
-            ChangeTracker tracker = new ChangeTracker();
             ListTag list = NbtUtils.getList(compoundTag, handler.getName(), Tag.TAG_COMPOUND);
-            // The storage knows its own dimension on every supported version, unlike the upgrader,
-            // whose dimension key is private. Block entities carry absolute coordinates already, so
-            // the chunk is only recorded to point at the region file the data lives in. ChunkPos
-            // became a record in 26.1, so its own toString is used instead of its coordinates: it
-            // renders '[x, z]' on every supported version.
+            if (list.isEmpty()) return false;
+
+            ChangeTracker tracker = new ChangeTracker();
             try (var ignored =
                     TranslationContext.pushLocation(
-                            ResourceIds.key(storage.storageInfo().dimension())
-                                    + " chunk "
-                                    + chunkPos)) {
+                            ResourceIds.key(storage.storageInfo().dimension()))) {
                 for (int i = 0; i < list.size(); i++) {
                     tracker.add(this.handler.handle(NbtUtils.getCompound(list, i)));
                 }

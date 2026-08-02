@@ -120,8 +120,8 @@ The first launch writes a default config to `config/wtem.json`, with every optio
   "nbt_max_depth": 32,
   "rebuild_nested_keys": true,
   "skipped": {
-    "command_block_output": false,
-    "filtered_text": false
+    "command_block_output": true,
+    "filtered_text": true
   },
   "skipped_paths": [
     "function/animated_java/"
@@ -158,7 +158,7 @@ The first launch writes a default config to `config/wtem.json`, with every optio
 
 ### Skipped text
 
-Both options default to `false`, i.e. extract as usual, which matches the behaviour from before these options existed. Set to `true`, the matching text stays out of the language file and the original text in the save is left alone, so the choice is reversible at any time: turn it back off and extract again to pick the text up.
+Both options default to `true`. Set to `true`, the matching text stays out of the language file and the original text in the save is left alone.
 
 - `command_block_output`: the cached result of the last execution of a command block or command block minecart (`LastOutput`).
 - `filtered_text`: the chat-filtered copy of sign lines and written book pages (`filtered_messages` / `filtered`).

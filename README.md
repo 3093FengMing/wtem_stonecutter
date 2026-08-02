@@ -121,8 +121,8 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
   "nbt_max_depth": 32,
   "rebuild_nested_keys": true,
   "skipped": {
-    "command_block_output": false,
-    "filtered_text": false
+    "command_block_output": true,
+    "filtered_text": true
   },
   "skipped_paths": [
     "function/animated_java/"
@@ -158,7 +158,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 
 ### 跳过的文本
 
-两项都默认 `false`，即照常提取，与没有这些配置项时的行为一致。改为 `true` 时对应文本不进入语言文件，存档中的原文也保持不动，因此随时可以改回来：关掉再提取一次就能重新收进去。
+两项都默认 `true`。改为 `true` 时对应文本不进入语言文件，存档中的原文也保持不变。
 
 - `command_block_output`：命令方块和命令方块矿车缓存的上一次执行结果（`LastOutput`）。
 - `filtered_text`：告示牌行和成书页的聊天过滤副本（`filtered_messages` / `filtered`）。

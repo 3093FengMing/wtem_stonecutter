@@ -21,7 +21,7 @@
     ]
   },
   "mixins": [
-    "mixins.wtem.json"
+    "${mixins}"
   ],
   "depends": {
     "fabricloader": ">=0.17",

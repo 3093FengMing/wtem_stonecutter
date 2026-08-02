@@ -145,7 +145,7 @@ public class WtemScreen extends Screen {
     public void extractRenderState(
             GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(guiGraphics, mouseX, mouseY, partialTick);
-        guiGraphics.centeredText(this.font, this.title, this.width / 2, 20, 16777215);
+        guiGraphics.centeredText(this.font, this.title, this.width / 2, 20, -1);
         int left = this.width / 2 - 150;
         int right = this.width / 2 + 150;
         int bottom = this.height / 4 + 100;
@@ -160,13 +160,13 @@ public class WtemScreen extends Screen {
                 Component.translatable("gui.wtem.main.info.extracted", progress.converted()),
                 left,
                 40,
-                10526880);
+                -1);
         guiGraphics.text(
                 this.font,
                 Component.translatable("gui.wtem.main.info.total", progress.totalChunks()),
                 left,
                 40 + (9 + 3) * 2,
-                10526880);
+                -1);
         int warnings = this.worldExtractor.getReport().failures().size();
         if (warnings > 0) {
             guiGraphics.text(
@@ -197,8 +197,8 @@ public class WtemScreen extends Screen {
                 Component.translatable(
                         "gui.wtem.main.progress.percentage",
                         Mth.floor(progress.totalProgress() * 100.0F));
-        guiGraphics.centeredText(this.font, component, this.width / 2, bottom + 2 * 9 + 2, 10526880);
+        guiGraphics.centeredText(this.font, component, this.width / 2, bottom + 2 * 9 + 2, -1);
         guiGraphics.centeredText(
-                this.font, component2, this.width / 2, bottom + (top - bottom) / 2 - 9 / 2, 10526880);
+                this.font, component2, this.width / 2, bottom + (top - bottom) / 2 - 9 / 2, -1);
     }
 }

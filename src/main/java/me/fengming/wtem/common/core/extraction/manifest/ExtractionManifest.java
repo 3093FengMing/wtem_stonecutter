@@ -1,4 +1,4 @@
-package me.fengming.wtem.common.core.extraction.table;
+package me.fengming.wtem.common.core.extraction.manifest;
 
 import java.util.List;
 
@@ -6,10 +6,7 @@ import java.util.List;
  * Renders the extraction records as a table, written beside the language catalog.
  *
  * <p>CSV is used rather than a log or a JSON file because the audience is a translator deciding how
- * a line should read, and the question they ask is "what else is in this chest" or "where else does
- * this sentence appear". A spreadsheet sorts and filters on a column, which answers both; a log
- * answers neither without being read start to finish. It also round-trips through the translation
- * platforms that already take CSV.
+ * a line should read.
  *
  * <p>The file is a companion to the catalog, not a replacement: the catalog stays exactly the JSON
  * the game loads, and nothing here is read back in.
@@ -19,8 +16,6 @@ public final class ExtractionManifest {
     public static final List<String> COLUMNS =
             List.of("key", "text", "source", "location", "subject", "reused");
 
-    // Excel and LibreOffice both read a lone LF, but only Excel guesses the wrong encoding without a
-    // BOM, and a CRLF line ending is what the CSV grammar actually specifies.
     private static final String LINE_ENDING = "\r\n";
     private static final char DELIMITER = ',';
     private static final char QUOTE = '"';

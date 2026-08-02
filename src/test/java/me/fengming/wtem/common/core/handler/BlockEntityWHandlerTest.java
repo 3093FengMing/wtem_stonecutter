@@ -46,6 +46,17 @@ class BlockEntityWHandlerTest {
     static void bootstrapMinecraft() {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
+        WtemConfig.initialize(new WtemConfig(
+            WtemConfig.DEFAULT.stages(),
+            WtemConfig.DEFAULT.resources(),
+            WtemConfig.DEFAULT.keyReuse(),
+            WtemConfig.DEFAULT.keyNaming(),
+            WtemConfig.DEFAULT.nbtMaxDepth(),
+            WtemConfig.DEFAULT.rebuildNestedKeys(),
+            new WtemConfig.Skipped(false, true),
+            WtemConfig.DEFAULT.skippedPaths(),
+            WtemConfig.DEFAULT.builtinEntries(),
+            WtemConfig.DEFAULT.languageFile()));
     }
 
     @BeforeEach
@@ -191,15 +202,17 @@ class BlockEntityWHandlerTest {
 
     @Test
     void coversBothSignSidesAndBothMessageLists() {
-        assertTrue(new BlockEntityWHandler().handle(nbt(FILTERED_SIGN)));
+        withSkipped(new WtemConfig.Skipped(true, false), () -> {
+            assertTrue(new BlockEntityWHandler().handle(nbt(FILTERED_SIGN)));
 
-        assertEquals(
+            assertEquals(
                 Map.of(
-                        "sign.1.front_text.0", "F0",
-                        "sign.1.front_text.0.filtered", "F0f",
-                        "sign.1.back_text.0", "B0",
-                        "sign.1.back_text.0.filtered", "B0f"),
+                    "sign.1.front_text.0", "F0",
+                    "sign.1.front_text.0.filtered", "F0f",
+                    "sign.1.back_text.0", "B0",
+                    "sign.1.back_text.0.filtered", "B0f"),
                 TranslationContext.snapshot());
+        });
     }
 
     @Test
