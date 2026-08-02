@@ -62,9 +62,9 @@ public final class TranslationContext {
     /**
      * Adds a translation entry using the current path as its base key.
      *
-     * <p>The allocation order follows the upstream extractor: the first use keeps the base key, while
-     * subsequent uses receive {@code .1}, {@code .2}, and so on. Identical text reuses the key it was
-     * first given, unless the configured reuse policy or {@code keepDuplicates} opts out.
+     * <p>The first use keeps the base key, while subsequent uses receive {@code .1}, {@code .2},
+     * and so on. Identical text reuses the key it was first given,
+     * unless the configured reuse policy or {@code keepDuplicates} opts out.
      */
     public static String addEntry(String value) {
         State state = state();
