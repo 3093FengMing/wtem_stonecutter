@@ -654,7 +654,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             this.worldStem.close();
         }
     }
-
+    //~if >= 26.1 'SimpleRegionStorageUpgrader' -> 'RegionStorageUpgrader'
     public class ChunkExtractor extends RegionStorageUpgrader {
         private final AbstractWHandler<CompoundTag> handler;
 

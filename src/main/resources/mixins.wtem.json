@@ -3,6 +3,7 @@
   "compatibilityLevel": "${java}",
   "package": "me.fengming.wtem.common.mixin",
   "mixins": [
+    "MixinRegionStorageUpgrader",
     "MixinWorldUpgrader"
   ],
   "client": [

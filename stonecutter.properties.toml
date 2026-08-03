@@ -2,7 +2,7 @@
 mod.id = "wtem"
 mod.name = "WTEM"
 mod.group = "me.fengming"
-mod.version = "0.1.0-beta"
+mod.version = "0.1.1-beta"
 
 deps.fabric_loader = "0.19.3"
 loomx.loom_version = "1.17-SNAPSHOT"

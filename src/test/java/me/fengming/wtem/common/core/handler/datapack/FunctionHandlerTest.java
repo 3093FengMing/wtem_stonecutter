@@ -226,6 +226,14 @@ class FunctionHandlerTest {
         assertNotEquals(command, result);
     }
 
+    @Test
+    void testItemInMarco() {
+        String command = "$execute as @s[tag=locked_$(texture),tag=!unlocked_all] run item replace entity @s inventory.$(slot) with bone[item_name={\"bold\":false,\"color\":\"#666666\",\"italic\":false,\"text\":\"LOCKED\"},lore=[{\"bold\":false,\"color\":\"#666666\",\"italic\":false,\"text\":\"Unlock using advancements\"}]]";
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertNotEquals(command, result);
+    }
+
     private static String mergeContinuationLines(String value) {
         return value.replaceAll("\\\\[ \\t]*\\R[ \\t]*", "");
     }

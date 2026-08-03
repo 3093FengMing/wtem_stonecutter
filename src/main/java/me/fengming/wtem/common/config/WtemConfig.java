@@ -61,7 +61,7 @@ public record WtemConfig(
     /**
      * Datapack directories skipped by default.
      */
-    public static final List<String> DEFAULT_SKIPPED_PATHS = List.of("function/animated_java/");
+    public static final List<String> DEFAULT_SKIPPED_PATHS = List.of("animated_java/function");
 
     /**
      * Entries every catalog starts with.
@@ -249,16 +249,13 @@ public record WtemConfig(
      * unchanged, because the pack it came from is still loaded alongside and already supplies it.
      *
      * @param path the resource path within its namespace, including the registry directory, such as
-     *     {@code function/animated_java/}
+     *     {@code animated_java/function/}
      */
     public boolean isPathSkipped(String path) {
         if (path == null || this.skippedPaths.isEmpty()) return false;
 
         for (String skipped : this.skippedPaths) {
-            // Matching on the segment boundary keeps 'function/animated' from also skipping
-            // 'function/animated_java', which a bare prefix test would.
-            if (path.equals(skipped)) return true;
-            if (path.startsWith(skipped) && path.charAt(skipped.length()) == '/') return true;
+            if (path.startsWith(skipped)) return true;
         }
         return false;
     }

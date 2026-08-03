@@ -104,7 +104,7 @@ tasks {
         }
 
         val mixins = when {
-            stonecutter.eval(stonecutter.current.version, ">=26.1") -> "mixins.26.1.wtem.json"
+            stonecutter.eval(stonecutter.current.version, ">=26.1") -> "mixins.wtem.json"
             else -> "mixins.wtem.json"
         }
 
@@ -179,8 +179,7 @@ publishMods {
             accessToken = providers.environmentVariable("MODRINTH_TOKEN")
             projectId = id
             minecraftVersions.addAll(compatibleVersions)
-            // fabric.mod.json declares `"environment": "client"`
-            environment = ModrinthEnvironment.CLIENT_ONLY
+            environment = ModrinthEnvironment.SINGLEPLAYER_ONLY
             additionalFile(loomx.modSourcesJar.flatMap { it.archiveFile }) {
                 type = ModrinthApi.AdditionalFileType.SOURCES_JAR
             }
@@ -204,7 +203,7 @@ publishMods {
             accessToken = providers.environmentVariable("GITHUB_TOKEN")
             repository = repo
             commitish = providers.environmentVariable("GITHUB_SHA").orElse("main")
-            tagName = "v$modVersion"
+            tagName = "v$modVersion+${sc.current.version}"
             // Every version node uploads into the single release created for the tag, so the first
             // node to run must be allowed to create it and later nodes must not create their own.
             allowEmptyFiles = true

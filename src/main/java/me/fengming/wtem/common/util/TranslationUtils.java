@@ -9,7 +9,11 @@ import com.mojang.serialization.JsonOps;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
+import me.fengming.wtem.common.core.visitor.ItemTagVisitor;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtOps;
@@ -27,6 +31,8 @@ import net.minecraft.network.chat.Style;
 public final class TranslationUtils {
     private static final String LEGACY_HOVER_EVENT = "hoverEvent";
     private static final String HOVER_EVENT = "hover_event";
+    private static final String LEGACY_CLICK_EVENT = "clickEvent";
+    private static final String CLICK_EVENT = "click_event";
 
     private TranslationUtils() {}
 
@@ -316,6 +322,8 @@ public final class TranslationUtils {
         tracker.add(translateComponentArguments(result, "with"));
         tracker.add(translateHoverEvent(result, LEGACY_HOVER_EVENT));
         tracker.add(translateHoverEvent(result, HOVER_EVENT));
+        tracker.add(translateClickEvent(result, LEGACY_CLICK_EVENT, true));
+        tracker.add(translateClickEvent(result, CLICK_EVENT, false));
         return new TransformResult(result, tracker.isChanged());
     }
 
@@ -370,21 +378,56 @@ public final class TranslationUtils {
         if (!hoverEvent.has("action")) return false;
 
         String action = hoverEvent.get("action").getAsString();
-        if ("show_text".equals(action)) {
-            ChangeTracker tracker = new ChangeTracker();
-            tracker.add(translateComponentProperty(hoverEvent, "contents"));
-            tracker.add(translateComponentProperty(hoverEvent, "value"));
-            return tracker.isChanged();
-        }
+        ChangeTracker tracker = new ChangeTracker();
 
-        if (!"show_entity".equals(action)) return false;
         for (String contentName : List.of("contents", "value")) {
             if (!hoverEvent.has(contentName) || !hoverEvent.get(contentName).isJsonObject()) continue;
 
-            JsonObject entity = hoverEvent.getAsJsonObject(contentName);
-            if (translateComponentProperty(entity, "name")) return true;
+            JsonObject content = hoverEvent.getAsJsonObject(contentName);
+            if (translateComponentProperty(content, "name")) return true;
+        }
+
+        switch (action) {
+            case "show_text" -> {
+                tracker.add(translateComponentProperty(hoverEvent, "contents"));
+                tracker.add(translateComponentProperty(hoverEvent, "value"));
+                return tracker.isChanged();
+            }
+            case "show_item" -> {
+                ItemTagVisitor visitor = new ItemTagVisitor();
+                visitor.visitComponents(
+                    hoverEvent.get("id").getAsString(),
+                    NbtUtils.fromJson(hoverEvent.get("components").getAsJsonObject()));
+                tracker.add(visitor.isChanged());
+                return tracker.isChanged();
+            }
+            case "show_entity" -> {
+                tracker.add(translateComponentProperty(hoverEvent, "name"));
+                return tracker.isChanged();
+            }
         }
         return false;
+    }
+
+    private static boolean translateClickEvent(JsonObject component, String name, boolean legacy) {
+        if (!component.has(name) || !component.get(name).isJsonObject()) return false;
+
+        JsonObject clickEvent = component.getAsJsonObject(name);
+        if (!clickEvent.has("action")) return false;
+
+        String action = clickEvent.get("action").getAsString();
+        if (!"run_command".equals(action)) return false;
+
+        String command = legacy ?
+            clickEvent.get("value").getAsString() :
+            clickEvent.get("command").getAsString();
+        String translated = FunctionHandler.processFunction(command);
+        boolean changed = !command.equals(translated);
+        if (changed) {
+            clickEvent.addProperty(legacy ? "value" : "command", translated);
+        }
+
+        return changed;
     }
 
     private static PathTransform translateJsonPath(

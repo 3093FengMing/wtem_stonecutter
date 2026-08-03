@@ -17,7 +17,7 @@ accessible field net/minecraft/util/worldupdate/WorldUpgrader upgradeProgress Ln
 
 #extendable method net/minecraft/util/worldupdate/WorldUpgrader work ()V
 #extendable class net/minecraft/util/worldupdate/WorldUpgrader$AbstractUpgrader
-#extendable class net/minecraft/util/worldupdate/WorldUpgrader$RegionStorageUpgrader
+#extendable class net/minecraft/util/worldupdate/WorldUpgrader$SimpleRegionStorageUpgrader
 #
 #accessible field net/minecraft/util/worldupdate/WorldUpgrader finished Z
 #accessible field net/minecraft/util/worldupdate/WorldUpgrader thread Ljava/lang/Thread;
@@ -25,12 +25,12 @@ accessible field net/minecraft/util/worldupdate/WorldUpgrader upgradeProgress Ln
 #accessible field net/minecraft/util/worldupdate/WorldUpgrader overworldDataStorage Lnet/minecraft/world/level/storage/DimensionDataStorage;
 #
 ##?if > 1.21.1 && < 26.1 {
-##extendable method net/minecraft/util/worldupdate/WorldUpgrader$RegionStorageUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/Component;)V
+##extendable method net/minecraft/util/worldupdate/WorldUpgrader$SimpleRegionStorageUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/Component;)V
 ##extendable method net/minecraft/util/worldupdate/WorldUpgrader$AbstractUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Ljava/lang/String;Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/Component;)V
 ##?}
 #
 ##?if = 1.21.1 {
-##extendable method net/minecraft/util/worldupdate/WorldUpgrader$RegionStorageUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Lnet/minecraft/network/chat/MutableComponent;Lnet/minecraft/network/chat/MutableComponent;)V
+##extendable method net/minecraft/util/worldupdate/WorldUpgrader$SimpleRegionStorageUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Lnet/minecraft/network/chat/MutableComponent;Lnet/minecraft/network/chat/MutableComponent;)V
 ##extendable method net/minecraft/util/worldupdate/WorldUpgrader$AbstractUpgrader <init> (Lnet/minecraft/util/worldupdate/WorldUpgrader;Lnet/minecraft/util/datafix/DataFixTypes;Ljava/lang/String;Ljava/lang/String;Lnet/minecraft/network/chat/MutableComponent;Lnet/minecraft/network/chat/MutableComponent;)V
 ##?}
 
