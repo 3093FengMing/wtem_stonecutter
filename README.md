@@ -125,7 +125,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
     "filtered_text": true
   },
   "skipped_paths": [
-    "function/animated_java/"
+    "animated_java:function"
   ],
   "builtin_entries": {
     "wtem.blank": "",
@@ -152,7 +152,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 - `nbt_max_depth`：NBT 递归提取的层数上限。超出上限的数据保持原样。小于 1 的值按默认值 32 处理。
 - `rebuild_nested_keys`：物品上的 `block_entity_data` 是否用自己的键从头命名。默认 `true`，例如不考虑复用的情况下，一把在潜影盒中的木剑在无论在哪里都得到形如 `item.wooden_sword.1.name`。若为 `false` ，则形如 `item.shulker_box.1.container.wooden_sword.1.name`。
 - `skipped`：是否要跳过一些特殊文本，详见下一节。
-- `skipped_paths`：跳过数据包指定路径下的文本。默认包含 `animated_java`。
+- `skipped_paths`：跳过数据包 `data/` 下指定目录中的资源，被跳过的资源不会写入伴生数据包。新规则采用资源位置格式 `<命名空间>:<资源路径>`；例如 `animated_java:function` 匹配 `data/animated_java/function/**`。资源路径写为 `*` 可跳过整个命名空间。
 - `language_file`：写入世界目录的语言文件名。只接受纯文件名，包含路径分隔符或非 `.json` 后缀时会被忽略。
 - `builtin_entries`：预置在语言文件中的条目。提取到的文本若与某条预置文本相同，就直接复用它的键，不再单独占一个键。默认预置空字符串、空格和 0~9。整段留空对象 `{}` 表示不预置任何条目；整段删掉则保持默认。
 

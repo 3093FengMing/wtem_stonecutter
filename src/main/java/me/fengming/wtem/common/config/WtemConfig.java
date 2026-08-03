@@ -35,8 +35,9 @@ import me.fengming.wtem.common.util.ResourceIo;
  * @param rebuildNestedKeys whether data nested inside an item restarts its key instead of extending
  *     the key of the item that carries it
  * @param skipped text that is translatable but that a pack may want left alone
- * @param skippedPaths data-pack directories left unread, so their contents are neither extracted nor
- *     copied into the generated pack
+ * @param skippedPaths data-pack directories that are left unread, written as
+ *     {@code namespace:resource/path}; namespace-relative paths written by older versions are also
+ *     accepted and apply to every namespace
  * @param builtinEntries entries the catalog starts with, which extracted text reuses instead of
  *     allocating a key of its own
  * @param languageFile name of the catalog written to the world directory
@@ -57,11 +58,14 @@ public record WtemConfig(
     public static final String FILE_NAME = "wtem.json";
     public static final String DEFAULT_LANGUAGE_FILE = "en_us.json";
     public static final int DEFAULT_NBT_MAX_DEPTH = 32;
+    private static final String DEFAULT_SKIPPED_PATH = "animated_java:function";
+    private static final String EARLY_DEFAULT_SKIPPED_PATH = "function/animated_java";
+    private static final String SLASH_DEFAULT_SKIPPED_PATH = "animated_java/function";
 
     /**
      * Datapack directories skipped by default.
      */
-    public static final List<String> DEFAULT_SKIPPED_PATHS = List.of("animated_java/function");
+    public static final List<String> DEFAULT_SKIPPED_PATHS = List.of(DEFAULT_SKIPPED_PATH);
 
     /**
      * Entries every catalog starts with.
@@ -88,7 +92,12 @@ public record WtemConfig(
         // Insertion order is kept for the string-keyed maps: it decides the order of the generated
         // file, and for the built-in entries it also decides which key wins when two share a value.
         resources = ordered(resources);
-        skippedPaths = List.copyOf(skippedPaths);
+        skippedPaths =
+                skippedPaths.stream()
+                        .map(WtemConfig::normalizeSkippedPath)
+                        .filter(path -> !path.isBlank())
+                        .distinct()
+                        .toList();
         builtinEntries = ordered(builtinEntries);
         // A non-positive limit would stop traversal before the outermost tag is read, which silently
         // extracts nothing at all. Treat it the same way as a malformed value.
@@ -247,17 +256,50 @@ public record WtemConfig(
      *
      * <p>A skipped resource is left out of the generated pack entirely rather than copied through
      * unchanged, because the pack it came from is still loaded alongside and already supplies it.
+     * Namespaced rules use the Minecraft resource-location form {@code namespace:path}; {@code *}
+     * can stand for either side. Colon-free rules retain the older behavior of matching {@code path}
+     * in every namespace.
      *
+     * @param namespace the resource namespace, which is the first directory below {@code data/}
      * @param path the resource path within its namespace, including the registry directory, such as
-     *     {@code animated_java/function/}
+     *     {@code function/shutter/play.mcfunction}
      */
-    public boolean isPathSkipped(String path) {
-        if (path == null || this.skippedPaths.isEmpty()) return false;
+    public boolean isPathSkipped(String namespace, String path) {
+        if (namespace == null || path == null || this.skippedPaths.isEmpty()) return false;
 
         for (String skipped : this.skippedPaths) {
-            if (path.startsWith(skipped)) return true;
+            int separator = skipped.indexOf(':');
+            if (separator >= 0) {
+                String skippedNamespace = skipped.substring(0, separator);
+                String skippedPath = skipped.substring(separator + 1);
+                if (("*".equals(skippedNamespace) || skippedNamespace.equals(namespace))
+                        && ("*".equals(skippedPath) || isSameOrChild(path, skippedPath))) {
+                    return true;
+                }
+                continue;
+            }
+
+            // Older configs had no namespace and matched the resource path in every namespace.
+            if (isSameOrChild(path, skipped)) return true;
+
+            // Both of these values have been written as the Animated Java default. Preserve their
+            // old path-only meaning above, but also make them address the directory they intended.
+            if (isAnimatedJavaDefaultAlias(skipped)
+                    && "animated_java".equals(namespace)
+                    && isSameOrChild(path, "function")) {
+                return true;
+            }
         }
         return false;
+    }
+
+    private static boolean isAnimatedJavaDefaultAlias(String path) {
+        return path.equals(EARLY_DEFAULT_SKIPPED_PATH)
+                || path.equals(SLASH_DEFAULT_SKIPPED_PATH);
+    }
+
+    private static boolean isSameOrChild(String candidate, String directory) {
+        return candidate.equals(directory) || candidate.startsWith(directory + "/");
     }
 
     /**
@@ -277,15 +319,39 @@ public record WtemConfig(
                 continue;
             }
 
-            // Both spellings of a directory mean the same thing to a reader, so both are accepted and
-            // stored in the one form the matcher compares against.
-            String path = element.getAsString().replace('\\', '/');
-            while (path.startsWith("/")) path = path.substring(1);
-            while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
-            if (path.isBlank()) continue;
-            paths.add(path);
+            paths.add(element.getAsString());
         }
         return List.copyOf(paths);
+    }
+
+    /** Normalizes user-facing paths and drops malformed namespaced entries. */
+    private static String normalizeSkippedPath(String value) {
+        String path = value.trim().replace('\\', '/');
+        while (path.startsWith("/")) path = path.substring(1);
+        while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
+
+        int separator = path.indexOf(':');
+        if (separator < 0) return path;
+        if (separator == 0 || separator != path.lastIndexOf(':')) {
+            return invalidSkippedPath(value);
+        }
+
+        String namespace = path.substring(0, separator);
+        String resourcePath = path.substring(separator + 1);
+        while (resourcePath.startsWith("/")) resourcePath = resourcePath.substring(1);
+        if ((!"*".equals(namespace) && !namespace.matches("[a-z0-9_.-]+"))
+                || (!"*".equals(resourcePath)
+                        && !resourcePath.matches("[a-z0-9/._-]+"))) {
+            return invalidSkippedPath(value);
+        }
+        return namespace + ":" + resourcePath;
+    }
+
+    private static String invalidSkippedPath(String value) {
+        Wtem.LOGGER.warn(
+                "Ignoring skipped_paths entry {}: expected namespace:path or a legacy path",
+                value);
+        return "";
     }
 
     /**
@@ -379,9 +445,8 @@ public record WtemConfig(
     /**
      * Text the game will happily translate but that a pack may have no reason to.
      *
-     * <p>Both settings default to off, which keeps the text being extracted. Switching one on drops
-     * the text from the catalog and leaves the world data holding it untouched, so nothing has to be
-     * undone to change the decision later: extracting again with the setting off picks the text up.
+     * <p>Both settings default to on, which leaves these volatile or duplicate values untouched and
+     * out of the catalog. Switching one off includes that text in extraction.
      *
      * @param commandBlockOutput the cached result of a command block's last run, which the game
      *     overwrites on the next tick the block fires and which only an operator holding a redstone

@@ -31,6 +31,7 @@ class WtemConfigTest {
         assertEquals(WtemConfig.DEFAULT_NBT_MAX_DEPTH, config.nbtMaxDepth());
         assertTrue(config.rebuildNestedKeys());
         assertEquals(WtemConfig.Skipped.DEFAULT, config.skipped());
+        assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, config.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, config.languageFile());
     }
 
@@ -116,8 +117,7 @@ class WtemConfigTest {
 
     @Test
     void readsWhichTranslatableTextToLeaveAlone() {
-        // Both default to off, so an untouched file keeps extracting text that was extracted before
-        // the settings existed.
+        // Both default to on, so volatile or duplicate values are left alone unless opted in.
         assertEquals(new WtemConfig.Skipped(true, true), parse("{}").skipped());
         assertEquals(
                 new WtemConfig.Skipped(false, true),
@@ -128,6 +128,132 @@ class WtemConfigTest {
         assertEquals(
                 WtemConfig.Skipped.DEFAULT,
                 parse("{\"skipped\": {\"filtered_text\": \"true\"}}").skipped());
+    }
+
+    @Test
+    void skipsDataPackDirectoriesRelativeToTheDataDirectory() {
+        WtemConfig config = parse("{}");
+
+        assertTrue(
+                config.isPathSkipped(
+                        "animated_java", "function/shutter/animations/play.mcfunction"));
+        assertTrue(config.isPathSkipped("animated_java", "function"));
+        assertFalse(
+                config.isPathSkipped(
+                        "another_namespace", "function/shutter/animations/play.mcfunction"));
+        assertFalse(config.isPathSkipped("animated_java", "function_extra/play.mcfunction"));
+        assertFalse(config.isPathSkipped("animated_javascript", "function/play.mcfunction"));
+    }
+
+    @Test
+    void normalizesNamespacedSkippedPaths() {
+        WtemConfig normalized =
+                parse(
+                        "{\"skipped_paths\": [\" /custom:function\\\\generated/ \","
+                                + " \"custom:function/generated\", \"///\", \"bad::path\","
+                                + " \":function\", \"custom:\", \"F:\\\\somewhere\", 42]}");
+        assertEquals(List.of("custom:function/generated"), normalized.skippedPaths());
+        assertTrue(
+                normalized.isPathSkipped(
+                        "custom", "function/generated/example.mcfunction"));
+        assertFalse(
+                normalized.isPathSkipped(
+                        "another", "function/generated/example.mcfunction"));
+
+        assertFalse(
+                parse("{\"skipped_paths\": []}")
+                        .isPathSkipped("animated_java", "function/example.mcfunction"));
+    }
+
+    @Test
+    void distinguishesNamespacedPathsFromLegacyNamespaceRelativePaths() {
+        WtemConfig namespaced = parse("{\"skipped_paths\": [\"function:loot_table\"]}");
+        assertTrue(namespaced.isPathSkipped("function", "loot_table/example.json"));
+        assertFalse(
+                namespaced.isPathSkipped(
+                        "another", "function/loot_table/example.mcfunction"));
+
+        WtemConfig legacy = parse("{\"skipped_paths\": [\"function/loot_table\"]}");
+        assertFalse(legacy.isPathSkipped("function", "loot_table/example.json"));
+        assertTrue(
+                legacy.isPathSkipped(
+                        "another", "function/loot_table/example.mcfunction"));
+    }
+
+    @Test
+    void keepsCustomNamespaceRelativePathsFromOlderConfigsWorking() {
+        WtemConfig legacy = parse("{\"skipped_paths\": [\"function/generated/\"]}");
+
+        assertEquals(List.of("function/generated"), legacy.skippedPaths());
+        assertTrue(legacy.isPathSkipped("example", "function/generated/example.mcfunction"));
+        assertTrue(legacy.isPathSkipped("another", "function/generated"));
+        assertFalse(
+                legacy.isPathSkipped(
+                        "example", "function/generated_extra/example.mcfunction"));
+        assertFalse(legacy.isPathSkipped("example", "loot_table/generated/example.json"));
+    }
+
+    @Test
+    void aSingleSegmentLegacyPathDoesNotTurnIntoANamespaceRule() {
+        WtemConfig legacy = parse("{\"skipped_paths\": [\"function\"]}");
+
+        assertTrue(legacy.isPathSkipped("one", "function/a.mcfunction"));
+        assertTrue(legacy.isPathSkipped("two", "function/b.mcfunction"));
+        assertFalse(legacy.isPathSkipped("function", "loot_table/a.json"));
+    }
+
+    @Test
+    void supportsExplicitWildcardSkippedPaths() {
+        WtemConfig config =
+                parse("{\"skipped_paths\": [\"*:function/generated\", \"internal:*\"]}");
+
+        assertTrue(config.isPathSkipped("example", "function/generated/example.mcfunction"));
+        assertTrue(config.isPathSkipped("another", "function/generated/example.mcfunction"));
+        assertFalse(config.isPathSkipped("example", "function/generated_extra/example.mcfunction"));
+        assertTrue(config.isPathSkipped("internal", "dialog/example.json"));
+        assertFalse(config.isPathSkipped("external", "dialog/example.json"));
+    }
+
+    @Test
+    void keepsBothHistoricalAnimatedJavaDefaultsWorkingWithoutChangingTheirOldMeaning() {
+        WtemConfig earlyDefault =
+                parse(
+                        "{\"skipped_paths\": [\"function/animated_java\","
+                                + " \"custom:dialog\"]}");
+        assertTrue(
+                earlyDefault.isPathSkipped(
+                        "animated_java", "function/example.mcfunction"));
+        assertTrue(
+                earlyDefault.isPathSkipped(
+                        "legacy", "function/animated_java/example.mcfunction"));
+
+        WtemConfig slashDefault =
+                parse(
+                        "{\"skipped_paths\": [\"animated_java/function\","
+                                + " \"custom:dialog\"]}");
+        assertTrue(
+                slashDefault.isPathSkipped(
+                        "animated_java", "function/example.mcfunction"));
+        assertTrue(
+                slashDefault.isPathSkipped(
+                        "legacy", "animated_java/function/example.mcfunction"));
+        assertFalse(slashDefault.isPathSkipped("legacy", "function/example.mcfunction"));
+    }
+
+    @Test
+    void preservesMixedSkippedPathSemanticsAcrossJsonRoundTrips() {
+        WtemConfig config =
+                parse(
+                        "{\"skipped_paths\": [\"animated_java:function\","
+                                + " \"function/generated\", \"*:loot_table/generated\"]}");
+        WtemConfig reloaded = WtemConfig.fromJson(config.toJson(RESOURCE_DIRECTORIES));
+
+        assertEquals(config.skippedPaths(), reloaded.skippedPaths());
+        assertTrue(reloaded.isPathSkipped("animated_java", "function/play.mcfunction"));
+        assertFalse(reloaded.isPathSkipped("other", "function/play.mcfunction"));
+        assertTrue(reloaded.isPathSkipped("other", "function/generated/play.mcfunction"));
+        assertTrue(reloaded.isPathSkipped("other", "loot_table/generated/chest.json"));
+        assertFalse(reloaded.isPathSkipped("other", "loot_table/generated_extra/chest.json"));
     }
 
     @Test
@@ -220,6 +346,7 @@ class WtemConfigTest {
         assertEquals(WtemConfig.DEFAULT_NBT_MAX_DEPTH, reloaded.nbtMaxDepth());
         assertTrue(reloaded.rebuildNestedKeys());
         assertEquals(WtemConfig.Skipped.DEFAULT, reloaded.skipped());
+        assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, reloaded.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_BUILTIN_ENTRIES, reloaded.builtinEntries());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, reloaded.languageFile());
     }

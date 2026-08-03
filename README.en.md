@@ -81,7 +81,7 @@ A key that appears in several places has one language file entry but one report 
 
 ## Configuration
 
-The first launch writes a default config to `config/wtem.json`, with every option spelled out at its default value so it can be edited directly. Every option is optional: deleting one or leaving it out keeps the default behaviour.
+The first launch writes a default config to `config/wtem.json`, with every option spelled out at its default value so it can be edited directly. Every option is optional: deleting one or leaving it out keeps the default behavior.
 
 ```json
 {
@@ -124,7 +124,7 @@ The first launch writes a default config to `config/wtem.json`, with every optio
     "filtered_text": true
   },
   "skipped_paths": [
-    "function/animated_java/"
+    "animated_java:function"
   ],
   "builtin_entries": {
     "wtem.blank": "",
@@ -151,7 +151,7 @@ The first launch writes a default config to `config/wtem.json`, with every optio
 - `nbt_max_depth`: the recursion limit for NBT extraction, which keeps mutually nested items and the like from exhausting the stack. Each nested item, entity or block entity costs one level, and data past the limit is left as it is. A value below 1 is treated as the default.
 - `rebuild_nested_keys`: whether `block_entity_data` on an item names itself from scratch. `true` by default, so, reuse aside, the same wooden sword in different shulker boxes gets the same key wherever it is. With `false` the key looks like `item.shulker_box.1.container.wooden_sword.name`.
 - `skipped`: text that can be translated but usually does not need to be. See below.
-- `skipped_paths`: text that will not be extracted in specific paths of datapacks.
+- `skipped_paths`: skips resources below selected directories under `data/`; skipped resources are not written to the companion pack. New rules use the resource-location form `<namespace>:<resource path>`: `animated_java:function` matches `data/animated_java/function/**`. `*:function/generated` matches that directory in every namespace, and a resource path of `*` skips a whole namespace.
 - `builtin_entries`: entries seeded into the language file. Extracted text that matches one of them reuses its key instead of taking a key of its own. The defaults seed the empty string, a space and 0~9: text with no translation value that nonetheless shows up constantly (blank sign lines, numbers on a scoreboard), which after seeding takes one line each. An empty object `{}` seeds nothing; deleting the whole option keeps the defaults.
 - `language_file`: the name of the language file written into the world directory. Only a plain file name is accepted; a name containing a path separator or not ending in `.json` is ignored.
 

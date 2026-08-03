@@ -228,10 +228,25 @@ class FunctionHandlerTest {
 
     @Test
     void testItemInMarco() {
+        // Before 1.21.5 item text components have to use serialized JSON strings. The command shape
+        // under test is otherwise identical, especially the bounded slot argument after $(slot).
+        //? if >=1.21.5 {
         String command = "$execute as @s[tag=locked_$(texture),tag=!unlocked_all] run item replace entity @s inventory.$(slot) with bone[item_name={\"bold\":false,\"color\":\"#666666\",\"italic\":false,\"text\":\"LOCKED\"},lore=[{\"bold\":false,\"color\":\"#666666\",\"italic\":false,\"text\":\"Unlock using advancements\"}]]";
-        String result = FunctionHandler.processFunction(List.of(command));
+        //?} else {
+        /*String command = "$execute as @s[tag=locked_$(texture),tag=!unlocked_all] run item replace entity @s inventory.$(slot) with bone[item_name='{\"bold\":false,\"color\":\"#666666\",\"italic\":false,\"text\":\"LOCKED\"}',lore=['{\"bold\":false,\"color\":\"#666666\",\"italic\":false,\"text\":\"Unlock using advancements\"}']]";
+        *///?}
+        String result = FunctionHandler.processFunction(command);
 
-        // assertNotEquals(command, result);
+        assertNotEquals(command, result, result);
+        assertTrue(result.contains("tag=locked_$(texture)"), result);
+        assertTrue(result.contains("inventory.$(slot)"), result);
+        assertTrue(result.contains("translate"), result);
+        assertEquals(
+                "LOCKED", TranslationContext.snapshot().get("item.bone.1.item_name"));
+        assertEquals(
+                "Unlock using advancements",
+                TranslationContext.snapshot().get("item.bone.1.lore.line0"));
+        assertEquals(2, TranslationContext.snapshot().size());
     }
 
     private static String mergeContinuationLines(String value) {

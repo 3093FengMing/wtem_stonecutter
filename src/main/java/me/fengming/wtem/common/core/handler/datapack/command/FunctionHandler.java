@@ -368,39 +368,51 @@ public class FunctionHandler extends NonExtraResourceHandler {
      *
      * <p>A macro line is an ordinary command behind a {@code $} marker, except that {@code $(name)}
      * interpolations stand where the grammar expects a concrete value. The dispatcher rejects those
-     * outright, which is why macro lines used to be skipped entirely. Replacing each interpolation
-     * with an equal-length placeholder gives the parser something it can accept while keeping every
-     * argument at its original offset, so the ranges it reports still address {@code source}.
+     * outright, which is why macro lines used to be skipped entirely. Each interpolation is replaced
+     * by the short, broadly valid stand-in {@code 1}. A short stand-in matters for arguments backed by
+     * a finite name table: for example, {@code inventory.$(slot)} can parse as {@code inventory.1},
+     * whereas an equal-length string of digits names no inventory slot.
+     *
+     * <p>Shortening an interpolation moves every argument behind it. Each mask therefore remembers
+     * both its source and parser ranges so replacements found in {@code text} can still be applied to
+     * the corresponding range in {@code source} without altering the macro variables themselves.
      *
      * @param source the line exactly as it appears in the function file
      * @param text the form handed to the parser: marker dropped, interpolations masked
-     * @param masks offsets of the masked regions, in ascending order
+     * @param masks source-to-parser ranges of masked interpolations, in ascending order
      */
-    private record CommandLine(String source, String text, List<Range> masks) {
+    private record CommandLine(String source, String text, List<Mask> masks) {
         private static final String MARKER = "$";
         private static final String VARIABLE_PREFIX = "$(";
-        // A repeated '1' is the least restrictive filler: it satisfies numeric slots, including the
-        // ones that reject zero, and is also valid inside a string or a resource location, whereas a
-        // letter would rule the numeric slots out. A long enough interpolation still overflows a
-        // numeric slot, which simply leaves the line untranslated.
-        private static final char MASK_CHARACTER = '1';
+        // One is accepted by numeric arguments that reject zero and is also valid inside strings and
+        // resource locations. No stand-in can satisfy every command grammar, but this deliberately
+        // avoids manufacturing an out-of-range number or a nonexistent indexed slot.
+        private static final String MASK_VALUE = "1";
 
         static CommandLine of(String source) {
             if (!source.startsWith(MARKER)) return new CommandLine(source, source, List.of());
 
             String body = source.substring(MARKER.length());
-            StringBuilder masked = new StringBuilder(body);
-            List<Range> masks = new ArrayList<>();
+            StringBuilder masked = new StringBuilder(body.length());
+            List<Mask> masks = new ArrayList<>();
+            int copied = 0;
             int start = body.indexOf(VARIABLE_PREFIX);
             while (start >= 0) {
                 int end = body.indexOf(')', start);
                 if (end < 0) break;
                 end++;
 
-                masks.add(new Range(start, end));
-                for (int i = start; i < end; i++) masked.setCharAt(i, MASK_CHARACTER);
+                masked.append(body, copied, start);
+                int maskedStart = masked.length();
+                masked.append(MASK_VALUE);
+                masks.add(
+                        new Mask(
+                                new Range(start, end),
+                                new Range(maskedStart, masked.length())));
+                copied = end;
                 start = body.indexOf(VARIABLE_PREFIX, end);
             }
+            masked.append(body, copied, body.length());
             return new CommandLine(source, masked.toString(), List.copyOf(masks));
         }
 
@@ -410,13 +422,39 @@ public class FunctionHandler extends NonExtraResourceHandler {
 
         /** Reports whether {@code [start, end)} overlaps a masked interpolation. */
         boolean isMasked(int start, int end) {
-            return this.masks.stream().anyMatch(mask -> mask.start() < end && start < mask.end());
+            return this.masks.stream()
+                    .map(Mask::masked)
+                    .anyMatch(mask -> mask.start() < end && start < mask.end());
         }
 
         /** Applies {@code replacements} to the original line rather than to the masked form. */
         String render(List<Replacement> replacements) {
-            String body = applyReplacements(this.source.substring(offset()), replacements);
-            return this.macro() ? MARKER + body : body;
+            StringBuilder body = new StringBuilder(this.source.substring(offset()));
+            for (Replacement replacement : replacements) {
+                Range sourceRange = sourceRange(replacement.start(), replacement.end());
+                body.replace(sourceRange.start(), sourceRange.end(), replacement.value());
+            }
+            return this.macro() ? MARKER + body : body.toString();
+        }
+
+        /** Maps a parser range that does not overlap an interpolation back to the source body. */
+        private Range sourceRange(int start, int end) {
+            if (isMasked(start, end)) {
+                throw new IllegalArgumentException("Cannot replace a masked macro interpolation");
+            }
+            return new Range(sourceOffset(start), sourceOffset(end));
+        }
+
+        private int sourceOffset(int maskedOffset) {
+            int expansion = 0;
+            for (Mask mask : this.masks) {
+                if (maskedOffset <= mask.masked().start()) break;
+                if (maskedOffset < mask.masked().end()) {
+                    throw new IllegalArgumentException("Offset lies inside a macro interpolation");
+                }
+                expansion += mask.source().length() - mask.masked().length();
+            }
+            return maskedOffset + expansion;
         }
 
         private int offset() {
@@ -424,7 +462,13 @@ public class FunctionHandler extends NonExtraResourceHandler {
         }
     }
 
-    private record Range(int start, int end) {}
+    private record Range(int start, int end) {
+        int length() {
+            return this.end - this.start;
+        }
+    }
+
+    private record Mask(Range source, Range masked) {}
 
     private record Replacement(int start, int end, String value) {}
 
