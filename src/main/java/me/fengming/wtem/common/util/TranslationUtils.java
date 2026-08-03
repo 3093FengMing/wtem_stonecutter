@@ -421,6 +421,7 @@ public final class TranslationUtils {
         String command = legacy ?
             clickEvent.get("value").getAsString() :
             clickEvent.get("command").getAsString();
+        if (command.startsWith("/")) command = command.substring(1);
         String translated = FunctionHandler.processFunction(command);
         boolean changed = !command.equals(translated);
         if (changed) {
