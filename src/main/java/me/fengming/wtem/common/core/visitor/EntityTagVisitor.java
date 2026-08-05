@@ -2,7 +2,6 @@ package me.fengming.wtem.common.core.visitor;
 
 import java.util.List;
 import java.util.OptionalDouble;
-import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
@@ -31,7 +30,9 @@ public class EntityTagVisitor implements SimpleTagVisitor {
         try (var traversal = NbtTraversalGuard.enter()) {
             if (!traversal.entered()) return;
 
-            String entityId = ResourceIds.path(NbtUtils.getString(tag, "id"));
+            String fullId = NbtUtils.getString(tag, "id");
+            if (!TranslationContext.config().filters().matchesEntity(fullId)) return;
+            String entityId = ResourceIds.path(fullId);
             try (var ignored = TranslationContext.pushSubject(describe(tag))) {
                 this.tracker.add(translateEntityText(tag, entityId));
                 visitPassengers(tag);
@@ -76,7 +77,7 @@ public class EntityTagVisitor implements SimpleTagVisitor {
         // A command block minecart caches its output in the same field a command block does, so the
         // setting that drops one drops the other: they are the same text for the same reason.
         if ("command_block_minecart".equals(entityId)
-                && !WtemConfig.active().skipped().commandBlockOutput()) {
+                && !TranslationContext.config().skipped().commandBlockOutput()) {
             tracker.add(
                     translateIndexedComponent(
                             tag, "LastOutput", "command_block_minecart", "last_output"));

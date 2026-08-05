@@ -1,4 +1,4 @@
-package me.fengming.wtem.common.core.extraction;
+package me.fengming.wtem.common.core.extraction.service;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;

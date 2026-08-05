@@ -47,6 +47,13 @@ stonecutter parameters {
             replace(".location()", ".identifier()")
         }
 
+
+        // 26.1 made ChunkPos a record; earlier mappings expose public x/z fields.
+        string(current.parsed >= "26.1", "chunk_pos_api") {
+            replace("chunkPos.x", "chunkPos.x()")
+            replace("chunkPos.z", "chunkPos.z()")
+        }
+
         // 1.21.5 turned the primitive tags into records and renamed the key accessor
         string(current.parsed >= "1.21.5", "nbt_api") {
             replace(".getAsString()", ".value()")

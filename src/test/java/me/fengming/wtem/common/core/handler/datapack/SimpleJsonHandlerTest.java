@@ -95,6 +95,35 @@ class SimpleJsonHandlerTest {
     }
 
     @Test
+    void extractsDialogDescriptionsAtEverySupportedLevel() {
+        SimpleJsonHandler handler =
+                handler(
+                        "description",
+                        "body[*].description",
+                        "inputs[*].description",
+                        "actions[*].description");
+
+        assertTrue(
+                handler.handle(
+                        id("dialog.json"),
+                        source(
+                                """
+                                {"description":{"text":"Dialog description"},
+                                 "body":[{"description":{"text":"Body description"}}],
+                                 "inputs":[{"description":{"text":"Input description"}}],
+                                 "actions":[{"description":{"text":"Action description"}}]}
+                                """)));
+
+        assertEquals(
+                Map.of(
+                        "datapack.example.dialog.description", "Dialog description",
+                        "datapack.example.dialog.body.0.description", "Body description",
+                        "datapack.example.dialog.inputs.0.description", "Input description",
+                        "datapack.example.dialog.actions.0.description", "Action description"),
+                TranslationContext.snapshot());
+    }
+
+    @Test
     void leavesTheFileAloneWhenNoTargetMatches() {
         SimpleJsonHandler handler = handler("display.title");
 

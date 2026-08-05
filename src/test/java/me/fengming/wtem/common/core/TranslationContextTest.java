@@ -103,6 +103,53 @@ class TranslationContextTest {
     }
 
     @Test
+    void fallsBackToStructuredKeysWhenAiNamingIsUnavailable() {
+        TranslationContext.setKeyNaming(
+                new WtemConfig.KeyNaming(WtemConfig.KeyNaming.Scheme.AI, 8));
+        TranslationContext.setKey("item.wooden_sword.1.name");
+
+        assertEquals(
+                "item.wooden_sword.1.name",
+                TranslationContext.addEntry("The Best Sword"));
+    }
+
+    @Test
+    void distinguishesCatalogOnlyEntriesFromWorldReplacements() {
+        TranslationContext.setKey("writable_book.1.content.page0");
+
+        TranslationContext.addCatalogEntry("Notes");
+
+        assertEquals(
+                Map.of("writable_book.1.content.page0", "Notes"),
+                TranslationContext.snapshot());
+        assertFalse(TranslationContext.records().getFirst().replaced());
+    }
+
+    @Test
+    void catalogsADataPackRuntimeTranslationKeyWithoutRenamingIt() {
+        assertTrue(TranslationContext.addCatalogEntry("Shop title", "Shop title"));
+
+        assertEquals(Map.of("Shop title", "Shop title"), TranslationContext.snapshot());
+        assertFalse(TranslationContext.records().getFirst().replaced());
+        assertFalse(
+                TranslationContext.addCatalogEntry("Shop title", "A conflicting translation"));
+        assertEquals("Shop title", TranslationContext.snapshot().get("Shop title"));
+    }
+
+    @Test
+    void discardsOnlySpeculativeEntriesAddedAfterTheRequestedBoundary() {
+        TranslationContext.setKey("existing");
+        TranslationContext.addEntry("Existing");
+        int boundary = TranslationContext.recordCount();
+        TranslationContext.setKey("temporary");
+        TranslationContext.addEntry("Temporary");
+
+        assertTrue(TranslationContext.discardEntryAddedSince("temporary", boundary));
+        assertFalse(TranslationContext.discardEntryAddedSince("existing", boundary));
+        assertEquals(Map.of("existing", "Existing"), TranslationContext.snapshot());
+    }
+
+    @Test
     void keepsWholeKeysNoMatterHowLongTheyGrow() {
         // Vanilla places no limit on the length of a translation key, so a key is never shortened:
         // the extraction path is the only thing that tells a translator where the text came from.

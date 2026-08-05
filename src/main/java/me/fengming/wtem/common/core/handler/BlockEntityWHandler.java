@@ -3,7 +3,6 @@ package me.fengming.wtem.common.core.handler;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.Set;
-import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.core.visitor.EntityTagVisitor;
@@ -47,7 +46,9 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
 
     @Override
     protected boolean innerHandle(CompoundTag compound) {
-        String id = ResourceIds.path(NbtUtils.getString(compound, "id"));
+        String fullId = NbtUtils.getString(compound, "id");
+        if (!TranslationContext.config().filters().matchesBlockEntity(fullId)) return false;
+        String id = ResourceIds.path(fullId);
         ChangeTracker tracker = new ChangeTracker();
         try (var ignored = TranslationContext.pushSubject(describe(compound))) {
             tracker.add(translateCustomName(compound, id));
@@ -176,12 +177,18 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
                 CompoundTag text = NbtUtils.getCompound(tag, side);
                 for (String messageType : SIGN_MESSAGES) {
                     boolean filtered = FILTERED_MESSAGES.equals(messageType);
-                    if (filtered && WtemConfig.active().skipped().filteredText()) continue;
+                    if (filtered && TranslationContext.config().skipped().filteredText()) continue;
 
                     ListTag messages = NbtUtils.getList(text, messageType);
                     for (int i = 0; i < messages.size(); i++) {
                         String keyPath = side + "." + i + (filtered ? ".filtered" : "");
-                        tracker.add(TranslationUtils.translateNbtComponent(messages, i, keyPath));
+                        // Sign message lists are heterogeneous in modern Minecraft: a literal
+                        // message can become a structured {translate:...} component directly.
+                        // Do not serialize that component back into a StringTag containing JSON,
+                        // which would make the game display the JSON text verbatim.
+                        tracker.add(
+                                TranslationUtils.translateNbtComponentAsStructured(
+                                        messages, i, keyPath));
                     }
                 }
             }
@@ -194,7 +201,7 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
     private boolean translateCommandBlock(CompoundTag tag) {
         String countType = "command_block";
         ChangeTracker tracker = new ChangeTracker();
-        if (!WtemConfig.active().skipped().commandBlockOutput()) {
+        if (!TranslationContext.config().skipped().commandBlockOutput()) {
             int index = TranslationContext.getTypeCounts(countType);
             try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
                 if (tracker.add(

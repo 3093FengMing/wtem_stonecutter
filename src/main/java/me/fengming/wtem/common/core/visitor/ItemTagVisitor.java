@@ -1,7 +1,6 @@
 package me.fengming.wtem.common.core.visitor;
 
 import me.fengming.wtem.common.Wtem;
-import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.util.ChangeTracker;
@@ -106,7 +105,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         }
 
         this.tracker.add(handleBook(components));
-        warnAboutWritableBook(components);
+        extractWritableBook(components);
         handleNestedItems(components);
         this.tracker.add(handleNestedData(components));
     }
@@ -134,7 +133,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
      * hold a translatable node. Replacing them would have to bake in one language, which is worse than
      * leaving them alone, so the content is only reported.
      */
-    private static void warnAboutWritableBook(CompoundTag components) {
+    private static void extractWritableBook(CompoundTag components) {
         String componentName = "minecraft:writable_book_content";
         if (!components.contains(componentName)) return;
 
@@ -145,11 +144,36 @@ public class ItemTagVisitor implements SimpleTagVisitor {
                         Tag.TAG_COMPOUND);
         if (pages.isEmpty()) return;
 
+        int bookIndex = TranslationContext.getTypeCounts("writable_book");
+        int recordsBefore = TranslationContext.recordCount();
+        try (var ignored =
+                TranslationContext.pushKey("writable_book." + bookIndex)) {
+            boolean skipFiltered = TranslationContext.config().skipped().filteredText();
+            for (int i = 0; i < pages.size(); i++) {
+                CompoundTag page = NbtUtils.getCompound(pages, i);
+                addCatalogPage(page, "raw", "content.page" + i);
+                if (!skipFiltered) {
+                    addCatalogPage(page, "filtered", "content.page" + i + ".filtered");
+                }
+            }
+        }
+        if (TranslationContext.recordCount() == recordsBefore) return;
+
+        TranslationContext.increaseTypeCounts("writable_book");
+
         Wtem.LOGGER.warn(
-                "Skipping {} pages of a book and quill at {}: its pages are plain text and cannot"
-                        + " hold a translatable component",
+                "Cataloged {} pages of a book and quill at {} without rewriting them: writable"
+                        + " pages are plain strings and cannot hold a translatable component",
                 pages.size(),
                 TranslationContext.getKey());
+    }
+
+    private static void addCatalogPage(CompoundTag page, String field, String keyPath) {
+        String text = NbtUtils.getString(page, field);
+        if (text.isBlank()) return;
+        try (var ignored = TranslationContext.push(keyPath)) {
+            TranslationContext.addCatalogEntry(text);
+        }
     }
 
     private static boolean handleBook(CompoundTag components) {
@@ -161,7 +185,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         ChangeTracker tracker = new ChangeTracker();
 
         try (var ignored = TranslationContext.pushKey("book." + bookIndex)) {
-            boolean skipFiltered = WtemConfig.active().skipped().filteredText();
+            boolean skipFiltered = TranslationContext.config().skipped().filteredText();
             ListTag pages = NbtUtils.getList(book, "pages", Tag.TAG_COMPOUND);
             for (int i = 0; i < pages.size(); i++) {
                 CompoundTag page = NbtUtils.getCompound(pages, i);
@@ -238,7 +262,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         boolean changed =
                 !blockEntity.isEmpty()
                         && new BlockEntityWHandler()
-                                .handle(blockEntity, WtemConfig.active().rebuildNestedKeys());
+                                .handle(blockEntity, TranslationContext.config().rebuildNestedKeys());
 
         ListTag bees = NbtUtils.getList(components, "minecraft:bees", Tag.TAG_COMPOUND);
         for (int i = 0; i < bees.size(); i++) {

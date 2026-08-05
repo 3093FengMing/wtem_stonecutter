@@ -14,7 +14,7 @@ import java.util.List;
  */
 public final class ExtractionManifest {
     public static final List<String> COLUMNS =
-            List.of("key", "text", "source", "location", "subject", "reused");
+            List.of("key", "text", "source", "location", "subject", "reused", "replaced");
 
     private static final String LINE_ENDING = "\r\n";
     private static final char DELIMITER = ',';
@@ -41,7 +41,8 @@ public final class ExtractionManifest {
                             record.origin().source(),
                             record.origin().location(),
                             record.origin().subject(),
-                            Boolean.toString(record.reused())));
+                            Boolean.toString(record.reused()),
+                            Boolean.toString(record.replaced())));
         }
         return csv.toString();
     }

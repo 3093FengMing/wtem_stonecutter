@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.function.Function;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.Wtem;
-import me.fengming.wtem.common.core.extraction.ExtractionDiagnostics;
+import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.Identifier;
@@ -47,6 +47,7 @@ public abstract class ResourceHandler {
     public boolean handle(Identifier rl, IoSupplier<InputStream> supplier) {
         try (var transaction = TranslationContext.beginTransaction();
                 var ignored = TranslationContext.pushLocation(rl.toString())) {
+            int recordsBefore = TranslationContext.recordCount();
             String p = rl.getPath();
             int extension = p.lastIndexOf('.');
             if (extension >= 0) p = p.substring(0, extension);
@@ -55,7 +56,12 @@ public abstract class ResourceHandler {
             TranslationContext.setKey("datapack." + s);
 
             boolean changed = innerHandle(rl, supplier);
-            if (!changed) return false;
+            if (!changed) {
+                if (TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
+                    transaction.commit();
+                }
+                return false;
+            }
             transaction.commit();
             return true;
         } catch (RuntimeException exception) {

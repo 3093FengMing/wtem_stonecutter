@@ -54,7 +54,10 @@ dependencies {
 
     // Use `mod{dependency type}` even on 26.1+ - loom-back-compat converts them
     modImplementation("net.fabricmc:fabric-loader:${property("deps.fabric_loader")}")
-    fapi("fabric-lifecycle-events-v1", "fabric-resource-loader-v0", "fabric-content-registries-v0", "fabric-registry-sync-v0")
+    modImplementation("maven.modrinth:yacl:${sc.properties["deps.yacl"] as String}")
+    // YACL 3.8 declares the fabric-api mod id (rather than only individual modules).  Keeping the
+    // aggregate dependency also supplies the resource loader required by YACL 3.9 on 26.x.
+    modImplementation("net.fabricmc.fabric-api:fabric-api:${sc.properties["deps.fabric_api"] as String}")
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
 }
@@ -113,6 +116,7 @@ tasks {
             register("name", "mod.name")
             register("version", "mod.version")
             register("minecraft", "mod.mc_compat")
+            register("yacl", "deps.yacl")
             set("mixins", mixins)
         }
 

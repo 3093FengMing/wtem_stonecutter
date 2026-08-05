@@ -37,6 +37,14 @@ public final class NbtUtils {
         return value.value();
     }
 
+    /** Reads a StringTag across the primitive-tag API change in 1.21.5. */
+    public static String getStringValue(StringTag value) {
+        //? if >=1.21.5 {
+        return value.value();
+        //?} else
+        //return value.value();
+    }
+
     public static CompoundTag getCompound(CompoundTag compound, String name) {
         CompoundTag child = findCompound(compound, name);
         return child == null ? new CompoundTag() : child;

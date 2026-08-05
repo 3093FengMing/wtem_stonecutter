@@ -6,7 +6,9 @@ import com.mojang.serialization.Dynamic;
 import it.unimi.dsi.fastutil.booleans.BooleanConsumer;
 import me.fengming.wtem.common.Wtem;
 import me.fengming.wtem.common.core.extraction.WorldExtractor;
+import me.fengming.wtem.common.core.extraction.service.ExtractionChoices;
 import me.fengming.wtem.common.core.extraction.service.ExtractionProgress;
+import me.fengming.wtem.common.core.extraction.service.ExtractionReport;
 import me.fengming.wtem.common.core.extraction.service.ExtractionStatus;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -35,11 +37,16 @@ import net.minecraft.world.level.storage.WorldData;
 public class WtemScreen extends Screen {
     public static final Component WTEM_SCREEN_TITLE = Component.translatable("gui.wtem.main.title");
     public static final Component WTEM_EXTRACT = Component.translatable("gui.wtem.extract");
+    public static final Component WTEM_CONFIG = Component.translatable("gui.wtem.config.button");
 
     private Button extractButton;
+    private Button selectButton;
+    private Button configButton;
     private final BooleanConsumer callback;
     private final WorldExtractor worldExtractor;
+    private final ExtractionChoices choices;
     private boolean completionHandled;
+    private boolean navigatingToChild;
 
     public static WtemScreen create(
             Minecraft mc,
@@ -71,7 +78,11 @@ public class WtemScreen extends Screen {
             /*levelStorage.saveDataTag(registry, worldStem.worldData());
 
             *///?}
-            return new WtemScreen(callback, dataFixer, worldStem, levelStorage, registry);
+            ExtractionChoices choices =
+                    ExtractionChoices.discover(
+                            worldStem, levelStorage.getLevelPath(net.minecraft.world.level.storage.LevelResource.ROOT));
+            return new WtemScreen(
+                    callback, dataFixer, worldStem, levelStorage, registry, choices);
         } catch (Exception e) {
             if (worldStem != null) worldStem.close();
             Wtem.LOGGER.warn("Failed to load world, can't extract world", e);
@@ -84,16 +95,19 @@ public class WtemScreen extends Screen {
             DataFixer dataFixer,
             WorldStem worldStem,
             LevelStorageSource.LevelStorageAccess levelStorage,
-            RegistryAccess registryAccess) {
+            RegistryAccess registryAccess,
+            ExtractionChoices choices) {
         super(WTEM_SCREEN_TITLE);
         this.callback = callback;
         this.worldExtractor =
                 new WorldExtractor(dataFixer, worldStem, levelStorage, registryAccess);
+        this.choices = choices == null ? ExtractionChoices.EMPTY : choices;
     }
 
     @Override
     protected void init() {
         super.init();
+        this.navigatingToChild = false;
         this.addRenderableWidget(
                 Button.builder(
                                 CommonComponents.GUI_CANCEL,
@@ -114,6 +128,57 @@ public class WtemScreen extends Screen {
                                             this.worldExtractor.startThread();
                                         })
                                 .bounds(this.width / 2 - 100, this.height / 4 + 120, 200, 20)
+                                .build());
+
+        configButton =
+                this.addRenderableWidget(
+                        Button.builder(
+                                        WTEM_CONFIG,
+                                        button -> {
+                                            if (this.worldExtractor.getExtractionStatus()
+                                                    != ExtractionStatus.READY) return;
+                                            this.navigatingToChild = true;
+                                            try {
+                                                Screen config = WtemConfigScreen.create(this);
+                                                //? if >=26.2 {
+                                                this.minecraft.setScreenAndShow(config);
+                                                //?} else {
+                                                /*this.minecraft.setScreen(config);
+                                                *///?}
+                                            } catch (RuntimeException exception) {
+                                                this.navigatingToChild = false;
+                                                Wtem.LOGGER.warn(
+                                                        "Failed to open WTEM configuration screen",
+                                                        exception);
+                                            }
+                                        })
+                                .bounds(this.width / 2 - 100, this.height / 4 + 90, 200, 20)
+                                .build());
+
+        selectButton =
+                this.addRenderableWidget(
+                        Button.builder(
+                                        Component.translatable("gui.wtem.select.button"),
+                                        button -> {
+                                            if (this.worldExtractor.getExtractionStatus()
+                                                    != ExtractionStatus.READY) return;
+                                            this.navigatingToChild = true;
+                                            try {
+                                                Screen selection =
+                                                        WtemSelectionScreen.create(this, this.choices);
+                                                //? if >=26.2 {
+                                                this.minecraft.setScreenAndShow(selection);
+                                                //?} else {
+                                                /*this.minecraft.setScreen(selection);
+                                                *///?}
+                                            } catch (RuntimeException exception) {
+                                                this.navigatingToChild = false;
+                                                Wtem.LOGGER.warn(
+                                                        "Failed to open WTEM selection screen",
+                                                        exception);
+                                            }
+                                        })
+                                .bounds(this.width / 2 - 100, this.height / 4 + 60, 200, 20)
                                 .build());
     }
 
@@ -136,7 +201,7 @@ public class WtemScreen extends Screen {
 
     @Override
     public void removed() {
-        if (!this.worldExtractor.getExtractionStatus().isTerminal()) {
+        if (!this.navigatingToChild && !this.worldExtractor.getExtractionStatus().isTerminal()) {
             this.worldExtractor.cancel();
         }
     }
@@ -151,8 +216,16 @@ public class WtemScreen extends Screen {
         int bottom = this.height / 4 + 100;
         int top = bottom + 10;
         ExtractionProgress progress = this.worldExtractor.getExtractionProgress();
-        if (progress.totalChunks() <= 0) return;
-        extractButton.visible = false;
+        ExtractionReport report = this.worldExtractor.getReport();
+        ExtractionStatus status = this.worldExtractor.getExtractionStatus();
+        boolean started = status != ExtractionStatus.READY;
+        extractButton.visible = !started;
+        selectButton.visible = !started;
+        configButton.visible = !started;
+        // Before extraction the progress bar occupies the same vertical area as the configuration
+        // button. It also has no meaningful counters yet. Region extraction may be disabled, so the
+        // run state rather than totalChunks decides when the progress/report area becomes visible.
+        if (!started) return;
 
         guiGraphics.fill(left - 1, bottom - 1, right + 1, top + 1, -16777216);
         guiGraphics.text(
@@ -167,7 +240,7 @@ public class WtemScreen extends Screen {
                 left,
                 40 + (9 + 3) * 2,
                 -1);
-        int warnings = this.worldExtractor.getReport().failures().size();
+        int warnings = report.failures().size();
         if (warnings > 0) {
             guiGraphics.text(
                     this.font,
@@ -200,5 +273,16 @@ public class WtemScreen extends Screen {
         guiGraphics.centeredText(this.font, component, this.width / 2, bottom + 2 * 9 + 2, -1);
         guiGraphics.centeredText(
                 this.font, component2, this.width / 2, bottom + (top - bottom) / 2 - 9 / 2, -1);
+        guiGraphics.text(
+                this.font,
+                Component.translatable(
+                        "gui.wtem.main.info.summary",
+                        report.translatedEntries(),
+                        report.modifiedChunks(),
+                        report.modifiedResources(),
+                        report.modifiedSavedData()),
+                left,
+                top + 18,
+                -1);
     }
 }

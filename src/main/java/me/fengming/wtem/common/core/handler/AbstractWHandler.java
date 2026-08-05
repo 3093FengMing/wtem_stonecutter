@@ -41,8 +41,13 @@ public abstract class AbstractWHandler<T extends Tag> {
 
         try (var transaction = TranslationContext.beginTransaction();
                 var ignored = TranslationContext.pushKey(getKey(tag))) {
+            int recordsBefore = TranslationContext.recordCount();
             boolean changed = innerHandle(tag);
-            if (changed) transaction.commit();
+            // Catalog-only fields, such as writable-book pages, deliberately leave NBT untouched.
+            // Their report rows must nevertheless survive this handler's rollback boundary.
+            if (changed || TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
+                transaction.commit();
+            }
             return changed;
         }
     }

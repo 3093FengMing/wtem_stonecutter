@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Random;
 import java.util.function.Function;
@@ -41,6 +42,10 @@ import me.fengming.wtem.common.util.ResourceIo;
  * @param builtinEntries entries the catalog starts with, which extracted text reuses instead of
  *     allocating a key of its own
  * @param languageFile name of the catalog written to the world directory
+ * @param filters include/exclude rules applied to region, data-pack, and storage locations
+ * @param outputs optional diagnostic and generated-output files produced by extraction
+ * @param aiTranslation settings for the optional OpenAI-compatible translation exporter
+ * @param resourcePack settings for the optional client resource-pack exporter
  * @author FengMing
  */
 public record WtemConfig(
@@ -53,7 +58,11 @@ public record WtemConfig(
         Skipped skipped,
         List<String> skippedPaths,
         Map<String, String> builtinEntries,
-        String languageFile) {
+        String languageFile,
+        Filters filters,
+        Outputs outputs,
+        AiTranslation aiTranslation,
+        ResourcePack resourcePack) {
 
     public static final String FILE_NAME = "wtem.json";
     public static final String DEFAULT_LANGUAGE_FILE = "en_us.json";
@@ -61,6 +70,35 @@ public record WtemConfig(
     private static final String DEFAULT_SKIPPED_PATH = "animated_java:function";
     private static final String EARLY_DEFAULT_SKIPPED_PATH = "function/animated_java";
     private static final String SLASH_DEFAULT_SKIPPED_PATH = "animated_java/function";
+
+    /** Keeps source compatibility for callers that only know the original ten settings. */
+    public WtemConfig(
+            Map<Stage, Boolean> stages,
+            Map<String, Boolean> resources,
+            KeyReuse keyReuse,
+            KeyNaming keyNaming,
+            int nbtMaxDepth,
+            boolean rebuildNestedKeys,
+            Skipped skipped,
+            List<String> skippedPaths,
+            Map<String, String> builtinEntries,
+            String languageFile) {
+        this(
+                stages,
+                resources,
+                keyReuse,
+                keyNaming,
+                nbtMaxDepth,
+                rebuildNestedKeys,
+                skipped,
+                skippedPaths,
+                builtinEntries,
+                languageFile,
+                Filters.DEFAULT,
+                Outputs.DEFAULT,
+                AiTranslation.DEFAULT,
+                ResourcePack.DEFAULT);
+    }
 
     /**
      * Datapack directories skipped by default.
@@ -79,26 +117,42 @@ public record WtemConfig(
                     KeyReuse.DEFAULT,
                     KeyNaming.DEFAULT,
                     DEFAULT_NBT_MAX_DEPTH,
-                    true,
+                    false,
                     Skipped.DEFAULT,
                     DEFAULT_SKIPPED_PATHS,
                     DEFAULT_BUILTIN_ENTRIES,
-                    DEFAULT_LANGUAGE_FILE);
+                    DEFAULT_LANGUAGE_FILE,
+                    Filters.DEFAULT,
+                    Outputs.DEFAULT,
+                    AiTranslation.DEFAULT,
+                    ResourcePack.DEFAULT);
 
     private static volatile WtemConfig active = DEFAULT;
 
     public WtemConfig {
-        stages = Map.copyOf(stages);
+        stages = stages == null ? Map.of() : Map.copyOf(stages);
+        keyReuse = keyReuse == null ? KeyReuse.DEFAULT : keyReuse;
+        keyNaming = keyNaming == null ? KeyNaming.DEFAULT : keyNaming;
+        skipped = skipped == null ? Skipped.DEFAULT : skipped;
         // Insertion order is kept for the string-keyed maps: it decides the order of the generated
         // file, and for the built-in entries it also decides which key wins when two share a value.
-        resources = ordered(resources);
+        resources = ordered(resources == null ? Map.of() : resources);
         skippedPaths =
-                skippedPaths.stream()
+                (skippedPaths == null ? DEFAULT_SKIPPED_PATHS : skippedPaths).stream()
+                        .filter(Objects::nonNull)
                         .map(WtemConfig::normalizeSkippedPath)
                         .filter(path -> !path.isBlank())
                         .distinct()
                         .toList();
-        builtinEntries = ordered(builtinEntries);
+        builtinEntries = ordered(builtinEntries == null ? Map.of() : builtinEntries);
+        // The YACL screen constructs a record directly, so apply the same path validation used by
+        // JSON loading here as well.  Otherwise a value such as ../outside.json could escape the
+        // world root when the next extraction writes its catalog.
+        languageFile = safeJsonFileName(languageFile, DEFAULT_LANGUAGE_FILE);
+        filters = filters == null ? Filters.DEFAULT : filters;
+        outputs = outputs == null ? Outputs.DEFAULT : outputs;
+        aiTranslation = aiTranslation == null ? AiTranslation.DEFAULT : aiTranslation;
+        resourcePack = resourcePack == null ? ResourcePack.DEFAULT : resourcePack;
         // A non-positive limit would stop traversal before the outermost tag is read, which silently
         // extracts nothing at all. Treat it the same way as a malformed value.
         if (nbtMaxDepth < 1) nbtMaxDepth = DEFAULT_NBT_MAX_DEPTH;
@@ -121,7 +175,8 @@ public record WtemConfig(
         SCOREBOARD("scoreboard"),
         BOSS_BAR("boss_bar"),
         DATAPACKS("datapacks"),
-        GENERATED_STRUCTURES("generated_structures");
+        GENERATED_STRUCTURES("generated_structures"),
+        STORAGE("storage");
 
         private final String id;
 
@@ -197,7 +252,11 @@ public record WtemConfig(
                 Skipped.fromJson(object(json, "skipped")),
                 skippedPaths(json),
                 builtinEntries(json),
-                languageFile(json));
+                languageFile(json),
+                Filters.fromJson(object(json, "filters")),
+                Outputs.fromJson(object(json, "outputs")),
+                AiTranslation.fromJson(object(json, "ai_translation")),
+                ResourcePack.fromJson(object(json, "resource_pack")));
     }
 
     /**
@@ -235,6 +294,10 @@ public record WtemConfig(
         json.add("skipped_paths", skippedPathJson);
         json.add("builtin_entries", builtinJson);
         json.addProperty("language_file", this.languageFile);
+        json.add("filters", this.filters.toJson());
+        json.add("outputs", this.outputs.toJson());
+        json.add("ai_translation", this.aiTranslation.toJson());
+        json.add("resource_pack", this.resourcePack.toJson());
         return json;
     }
 
@@ -249,6 +312,32 @@ public record WtemConfig(
      */
     public boolean isResourceEnabled(String directory) {
         return this.resources.getOrDefault(directory, true);
+    }
+
+    /** Returns a copy with only the extraction-screen source selection changed. */
+    public WtemConfig withSelection(Filters.Selection selection) {
+        Filters current = this.filters;
+        return new WtemConfig(
+                this.stages,
+                this.resources,
+                this.keyReuse,
+                this.keyNaming,
+                this.nbtMaxDepth,
+                this.rebuildNestedKeys,
+                this.skipped,
+                this.skippedPaths,
+                this.builtinEntries,
+                this.languageFile,
+                new Filters(
+                        current.region(),
+                        current.datapack(),
+                        current.storage(),
+                        current.entity(),
+                        current.blockEntity(),
+                        selection),
+                this.outputs,
+                this.aiTranslation,
+                this.resourcePack);
     }
 
     /**
@@ -266,6 +355,12 @@ public record WtemConfig(
      */
     public boolean isPathSkipped(String namespace, String path) {
         if (namespace == null || path == null || this.skippedPaths.isEmpty()) return false;
+
+        // ResourceManager callbacks normally provide a namespace-relative path.  A few callers
+        // (and older integrations) pass the physical data-directory path instead, so accept both
+        // forms.  This is also what makes a rule such as animated_java:function match
+        // data/animated_java/function/xxx.mcfunction rather than silently being ignored.
+        path = normalizeResourcePath(namespace, path);
 
         for (String skipped : this.skippedPaths) {
             int separator = skipped.indexOf(':');
@@ -291,6 +386,28 @@ public record WtemConfig(
             }
         }
         return false;
+    }
+
+    /**
+     * Applies the complete data-pack source filter in one place.
+     *
+     * <p>{@code skipped_paths} remains a backward-compatible directory exclusion, while the newer
+     * filter supports pack selection and include/exclude globs. Presenting and evaluating them as
+     * one filter pipeline avoids subtly different behavior between resource handlers.
+     */
+    public boolean matchesDatapackResource(
+            String packId, String namespace, String path) {
+        if (isPathSkipped(namespace, path)) return false;
+        return this.filters.matchesDatapack(
+                packId, packId + "/" + namespace + ":" + normalizeResourcePath(namespace, path));
+    }
+
+    private static String normalizeResourcePath(String namespace, String path) {
+        String normalized = path.trim().replace('\\', '/');
+        String prefix = "data/" + namespace + "/";
+        if (normalized.startsWith(prefix)) return normalized.substring(prefix.length());
+        if (normalized.startsWith(namespace + "/")) return normalized.substring(namespace.length() + 1);
+        return normalized.startsWith("data/") ? normalized.substring("data/".length()) : normalized;
     }
 
     private static boolean isAnimatedJavaDefaultAlias(String path) {
@@ -425,6 +542,86 @@ public record WtemConfig(
         return Optional.of(primitive.getAsInt());
     }
 
+    private static Optional<String> readString(JsonObject json, String name) {
+        JsonElement value = json.get(name);
+        if (value == null || !value.isJsonPrimitive()) return Optional.empty();
+        JsonPrimitive primitive = value.getAsJsonPrimitive();
+        return primitive.isString() ? Optional.of(primitive.getAsString()) : Optional.empty();
+    }
+
+    private static List<String> readStrings(JsonObject json, String name) {
+        JsonElement value = json.get(name);
+        if (value == null || !value.isJsonArray()) return List.of();
+
+        List<String> values = new ArrayList<>();
+        for (JsonElement element : value.getAsJsonArray()) {
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+                Wtem.LOGGER.warn("Ignoring {} entry {}: expected a string", name, element);
+                continue;
+            }
+            values.add(element.getAsString());
+        }
+        return List.copyOf(values);
+    }
+
+    private static void addStrings(JsonObject json, String name, List<String> values) {
+        JsonArray array = new JsonArray();
+        values.forEach(array::add);
+        json.add(name, array);
+    }
+
+    private static String safeText(String value, String fallback) {
+        if (value == null || value.trim().isBlank()) return fallback;
+        return value.trim();
+    }
+
+    private static String safeFileName(String value, String fallback) {
+        String candidate = value == null ? "" : value.trim();
+        return candidate.matches("[A-Za-z0-9._-]+")
+                        && !candidate.startsWith(".")
+                        && !"..".equals(candidate)
+                ? candidate
+                : fallback;
+    }
+
+    private static String safeJsonFileName(String value, String fallback) {
+        String candidate = value == null ? "" : value.trim();
+        return candidate.matches("[A-Za-z0-9._-]+\\.json")
+                        && !candidate.startsWith(".")
+                ? candidate
+                : fallback;
+    }
+
+    private static String safeFileStem(String value, String fallback) {
+        return safeFileName(value, fallback);
+    }
+
+    private static String safeRelativeDirectory(String value, String fallback) {
+        String candidate = value == null ? "" : value.trim().replace('\\', '/');
+        while (candidate.endsWith("/")) candidate = candidate.substring(0, candidate.length() - 1);
+        if (candidate.isBlank() || candidate.startsWith("/") || candidate.matches("[A-Za-z]:.*")) {
+            return fallback;
+        }
+        for (String segment : candidate.split("/")) {
+            if (segment.isBlank() || ".".equals(segment) || "..".equals(segment)) return fallback;
+        }
+        return candidate;
+    }
+
+    private static String safeHttpEndpoint(String value, String fallback) {
+        String candidate = safeText(value, fallback);
+        try {
+            java.net.URI uri = java.net.URI.create(candidate);
+            String scheme = uri.getScheme();
+            return ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
+                            && uri.getHost() != null
+                    ? candidate
+                    : fallback;
+        } catch (IllegalArgumentException exception) {
+            return fallback;
+        }
+    }
+
     private static <E extends Enum<E>> Optional<E> readEnum(
             JsonObject json, String name, E[] values, Function<E, String> id) {
         JsonElement value = json.get(name);
@@ -469,6 +666,424 @@ public record WtemConfig(
             json.addProperty("command_block_output", this.commandBlockOutput);
             json.addProperty("filtered_text", this.filteredText);
             return json;
+        }
+    }
+
+    /**
+     * Glob-like filters for locations reported by the extractor.
+     *
+     * <p>A rule without a leading {@code !} includes matching locations; a rule beginning with
+     * {@code !} excludes them. If at least one include rule exists, a location must match one of the
+     * include rules. Exclusions always win. Region locations use
+     * {@code <dimension>/chunk/<x>_<z>}, data-pack locations use {@code <pack>/<identifier>}, and
+     * saved-data locations use {@code <file>.dat/<key>}. Entity and block-entity rules match their
+     * namespaced type ids. The nested selection lists are exact allowlists populated by the
+     * extraction screen; an empty allowlist means all currently and subsequently discovered values.
+     */
+    public record Filters(
+            List<String> region,
+            List<String> datapack,
+            List<String> storage,
+            List<String> entity,
+            List<String> blockEntity,
+            Selection selection) {
+        public static final Filters DEFAULT =
+                new Filters(
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        Selection.DEFAULT);
+
+        /** Source compatibility for the original location-only filter constructor. */
+        public Filters(List<String> region, List<String> datapack, List<String> storage) {
+            this(region, datapack, storage, List.of(), List.of(), Selection.DEFAULT);
+        }
+
+        public Filters {
+            region = normalizedRules(region);
+            datapack = normalizedRules(datapack);
+            storage = normalizedRules(storage);
+            entity = normalizedRules(entity);
+            blockEntity = normalizedRules(blockEntity);
+            selection = selection == null ? Selection.DEFAULT : selection;
+        }
+
+        public boolean matchesRegion(String location) {
+            return matches(this.region, location);
+        }
+
+        public boolean matchesDatapack(String location) {
+            return matches(this.datapack, location);
+        }
+
+        public boolean matchesDatapack(String packId, String location) {
+            return this.selection.matchesDatapack(packId) && matchesDatapack(location);
+        }
+
+        public boolean matchesStorage(String location) {
+            return matches(this.storage, location);
+        }
+
+        public boolean matchesStorage(String fileName, String location) {
+            return this.selection.matchesStorageFile(fileName) && matchesStorage(location);
+        }
+
+        public boolean matchesEntity(String id) {
+            return this.selection.matchesEntity(id) && matches(this.entity, id);
+        }
+
+        public boolean matchesBlockEntity(String id) {
+            return this.selection.matchesBlockEntity(id) && matches(this.blockEntity, id);
+        }
+
+        static Filters fromJson(JsonObject json) {
+            return new Filters(
+                    readStrings(json, "region"),
+                    readStrings(json, "datapack"),
+                    readStrings(json, "storage"),
+                    readStrings(json, "entity"),
+                    readStrings(json, "block_entity"),
+                    Selection.fromJson(object(json, "selection")));
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            addStrings(json, "region", this.region);
+            addStrings(json, "datapack", this.datapack);
+            addStrings(json, "storage", this.storage);
+            addStrings(json, "entity", this.entity);
+            addStrings(json, "block_entity", this.blockEntity);
+            json.add("selection", this.selection.toJson());
+            return json;
+        }
+
+        private static List<String> normalizedRules(List<String> rules) {
+            if (rules == null) return List.of();
+            return rules.stream()
+                    .filter(Objects::nonNull)
+                    .map(rule -> rule.trim().replace('\\', '/'))
+                    .filter(rule -> !rule.isBlank() && !"!".equals(rule))
+                    .distinct()
+                    .toList();
+        }
+
+        private static boolean matches(List<String> rules, String location) {
+            if (location == null) return false;
+            location = location.trim().replace('\\', '/');
+            boolean hasInclude = false;
+            boolean included = false;
+            for (String rule : rules) {
+                boolean exclusion = rule.startsWith("!");
+                String pattern = exclusion ? rule.substring(1) : rule;
+                if (!exclusion) hasInclude = true;
+                if (!globMatches(pattern, location)) continue;
+                if (exclusion) return false;
+                included = true;
+            }
+            return !hasInclude || included;
+        }
+
+        private static boolean globMatches(String glob, String value) {
+            StringBuilder regex = new StringBuilder("^");
+            for (int i = 0; i < glob.length(); i++) {
+                char character = glob.charAt(i);
+                switch (character) {
+                    case '*' -> regex.append(".*");
+                    case '?' -> regex.append('.');
+                    default -> {
+                        if ("\\.^$|()[]{}+".indexOf(character) >= 0) regex.append('\\');
+                        regex.append(character);
+                    }
+                }
+            }
+            return value.matches(regex.append('$').toString());
+        }
+
+        public record Selection(
+                List<String> datapacks,
+                List<String> entities,
+                List<String> blockEntities,
+                List<String> storageFiles) {
+            public static final Selection DEFAULT =
+                    new Selection(List.of(), List.of(), List.of(), List.of());
+            /** Explicit empty allowlist; a truly empty list retains the legacy meaning "all". */
+            public static final String NONE = "!none";
+
+            public Selection {
+                datapacks = normalizedValues(datapacks);
+                entities = normalizedValues(entities);
+                blockEntities = normalizedValues(blockEntities);
+                storageFiles = normalizedValues(storageFiles);
+            }
+
+            public boolean matchesDatapack(String value) {
+                return selected(this.datapacks, value);
+            }
+
+            public boolean matchesEntity(String value) {
+                return selected(this.entities, value);
+            }
+
+            public boolean matchesBlockEntity(String value) {
+                return selected(this.blockEntities, value);
+            }
+
+            public boolean matchesStorageFile(String value) {
+                return selected(this.storageFiles, value);
+            }
+
+            static Selection fromJson(JsonObject json) {
+                return new Selection(
+                        readStrings(json, "datapacks"),
+                        readStrings(json, "entities"),
+                        readStrings(json, "block_entities"),
+                        readStrings(json, "storage_files"));
+            }
+
+            JsonObject toJson() {
+                JsonObject json = new JsonObject();
+                addStrings(json, "datapacks", this.datapacks);
+                addStrings(json, "entities", this.entities);
+                addStrings(json, "block_entities", this.blockEntities);
+                addStrings(json, "storage_files", this.storageFiles);
+                return json;
+            }
+
+            private static List<String> normalizedValues(List<String> values) {
+                if (values == null) return List.of();
+                List<String> normalized = values.stream()
+                        .filter(Objects::nonNull)
+                        .map(String::trim)
+                        .filter(value -> !value.isBlank())
+                        .distinct()
+                        .toList();
+                return normalized.contains(NONE) ? List.of(NONE) : normalized;
+            }
+
+            private static boolean selected(List<String> values, String candidate) {
+                if (candidate == null) return false;
+                if (values.isEmpty()) return true;
+                if (values.contains(NONE)) return false;
+                return values.contains(candidate.trim());
+            }
+        }
+    }
+
+    /** Extra files that can be emitted during an extraction run. */
+    public record Outputs(
+            boolean exportRegionSnbt,
+            boolean exportSchema,
+            String regionSnbtDirectory,
+            String schemaFile) {
+        private static final String DEFAULT_REGION_DIRECTORY = "wtem/regions";
+        private static final String DEFAULT_SCHEMA_FILE = "wtem-schema.json";
+        public static final Outputs DEFAULT =
+                new Outputs(false, false, DEFAULT_REGION_DIRECTORY, DEFAULT_SCHEMA_FILE);
+
+        public Outputs {
+            regionSnbtDirectory = safeRelativeDirectory(regionSnbtDirectory, DEFAULT_REGION_DIRECTORY);
+            schemaFile = safeJsonFileName(schemaFile, DEFAULT_SCHEMA_FILE);
+        }
+
+        static Outputs fromJson(JsonObject json) {
+            return new Outputs(
+                    readBoolean(json, "export_region_snbt").orElse(DEFAULT.exportRegionSnbt()),
+                    readBoolean(json, "export_schema").orElse(DEFAULT.exportSchema()),
+                    readString(json, "region_snbt_directory").orElse(DEFAULT.regionSnbtDirectory()),
+                    readString(json, "schema_file").orElse(DEFAULT.schemaFile()));
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            json.addProperty("export_region_snbt", this.exportRegionSnbt);
+            json.addProperty("export_schema", this.exportSchema);
+            json.addProperty("region_snbt_directory", this.regionSnbtDirectory);
+            json.addProperty("schema_file", this.schemaFile);
+            return json;
+        }
+    }
+
+    /** Settings for an OpenAI-compatible chat-completion translation endpoint. */
+    public record AiTranslation(
+            boolean enabled,
+            String endpoint,
+            String apiKey,
+            String model,
+            String targetLanguage,
+            String outputFile,
+            int batchSize,
+            int timeoutSeconds,
+            String translationPrompt,
+            String keyNamingPrompt) {
+        private static final String DEFAULT_ENDPOINT =
+                "https://api.openai.com/v1/chat/completions";
+        private static final String DEFAULT_MODEL = "gpt-4o-mini";
+        private static final String DEFAULT_TARGET_LANGUAGE = "zh-CN";
+        private static final String DEFAULT_OUTPUT_FILE = "zh_cn.json";
+        public static final String DEFAULT_TRANSLATION_PROMPT =
+                "Translate the values of the supplied JSON object into {target_language}. "
+                        + "Return only one JSON object with exactly the same keys. Preserve "
+                        + "Minecraft formatting codes, placeholders such as %s and %1$s, escape "
+                        + "sequences, whitespace, and intentional line breaks. Do not translate "
+                        + "JSON keys, commands, identifiers, or formatting tokens.";
+        public static final String DEFAULT_KEY_NAMING_PROMPT =
+                "Create one concise semantic Minecraft translation key for the supplied text and "
+                        + "suggested_path. Return only a JSON object in the form {\"key\":\"...\"}. "
+                        + "Use lowercase ASCII letters, digits, underscores, and dots only. Prefer "
+                        + "the source category (item, entity, block, sign, book, or datapack) as the "
+                        + "first segment and preserve the semantic role such as .name, .title, or "
+                        + ".description as the last segment. Translate the meaning into concise "
+                        + "English key words even when the visible text is in another language. "
+                        + "Describe the visible text rather than "
+                        + "the material id: for example, The Best Sword on a wooden sword should be "
+                        + "item.the_best_sword.name. Never include numeric occurrence indexes.";
+        public static final AiTranslation DEFAULT =
+                new AiTranslation(
+                        false,
+                        DEFAULT_ENDPOINT,
+                        "",
+                        DEFAULT_MODEL,
+                        DEFAULT_TARGET_LANGUAGE,
+                        DEFAULT_OUTPUT_FILE,
+                        40,
+                        60,
+                        DEFAULT_TRANSLATION_PROMPT,
+                        DEFAULT_KEY_NAMING_PROMPT);
+
+        /** Source compatibility for configurations constructed before prompts were customizable. */
+        public AiTranslation(
+                boolean enabled,
+                String endpoint,
+                String apiKey,
+                String model,
+                String targetLanguage,
+                String outputFile,
+                int batchSize,
+                int timeoutSeconds) {
+            this(
+                    enabled,
+                    endpoint,
+                    apiKey,
+                    model,
+                    targetLanguage,
+                    outputFile,
+                    batchSize,
+                    timeoutSeconds,
+                    DEFAULT_TRANSLATION_PROMPT,
+                    DEFAULT_KEY_NAMING_PROMPT);
+        }
+
+        public AiTranslation {
+            endpoint = safeHttpEndpoint(endpoint, DEFAULT_ENDPOINT);
+            apiKey = apiKey == null ? "" : apiKey.trim();
+            model = safeText(model, DEFAULT_MODEL);
+            targetLanguage = safeText(targetLanguage, DEFAULT_TARGET_LANGUAGE);
+            outputFile = safeJsonFileName(outputFile, DEFAULT_OUTPUT_FILE);
+            batchSize = Math.clamp(batchSize, 1, 200);
+            timeoutSeconds = Math.clamp(timeoutSeconds, 1, 600);
+            translationPrompt = safeText(translationPrompt, DEFAULT_TRANSLATION_PROMPT);
+            keyNamingPrompt = safeText(keyNamingPrompt, DEFAULT_KEY_NAMING_PROMPT);
+        }
+
+        public boolean usable() {
+            return this.enabled && !this.apiKey.isBlank();
+        }
+
+        static AiTranslation fromJson(JsonObject json) {
+            return new AiTranslation(
+                    readBoolean(json, "enabled").orElse(DEFAULT.enabled()),
+                    readString(json, "endpoint").orElse(DEFAULT.endpoint()),
+                    readString(json, "api_key").orElse(DEFAULT.apiKey()),
+                    readString(json, "model").orElse(DEFAULT.model()),
+                    readString(json, "target_language").orElse(DEFAULT.targetLanguage()),
+                    readString(json, "output_file").orElse(DEFAULT.outputFile()),
+                    readInt(json, "batch_size").orElse(DEFAULT.batchSize()),
+                    readInt(json, "timeout_seconds").orElse(DEFAULT.timeoutSeconds()),
+                    readString(json, "translation_prompt").orElse(DEFAULT.translationPrompt()),
+                    readString(json, "key_naming_prompt").orElse(DEFAULT.keyNamingPrompt()));
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            json.addProperty("enabled", this.enabled);
+            json.addProperty("endpoint", this.endpoint);
+            json.addProperty("api_key", this.apiKey);
+            json.addProperty("model", this.model);
+            json.addProperty("target_language", this.targetLanguage);
+            json.addProperty("output_file", this.outputFile);
+            json.addProperty("batch_size", this.batchSize);
+            json.addProperty("timeout_seconds", this.timeoutSeconds);
+            json.addProperty("translation_prompt", this.translationPrompt);
+            json.addProperty("key_naming_prompt", this.keyNamingPrompt);
+            return json;
+        }
+    }
+
+    /** Settings for writing the extracted catalog as a client resource pack. */
+    public record ResourcePack(
+            boolean enabled,
+            Format format,
+            String name,
+            String description,
+            String outputDirectory,
+            int packFormat) {
+        private static final String DEFAULT_NAME = "wtem_translations";
+        private static final String DEFAULT_DESCRIPTION = "WTEM translations";
+        private static final String DEFAULT_OUTPUT_DIRECTORY = "resourcepacks";
+        public static final ResourcePack DEFAULT =
+                new ResourcePack(
+                        true,
+                        Format.BOTH,
+                        DEFAULT_NAME,
+                        DEFAULT_DESCRIPTION,
+                        DEFAULT_OUTPUT_DIRECTORY,
+                        0);
+
+        public ResourcePack {
+            format = format == null ? Format.BOTH : format;
+            name = safeFileStem(name, DEFAULT_NAME);
+            description = safeText(description, DEFAULT_DESCRIPTION);
+            outputDirectory = safeRelativeDirectory(outputDirectory, DEFAULT_OUTPUT_DIRECTORY);
+            packFormat = Math.max(0, packFormat);
+        }
+
+        static ResourcePack fromJson(JsonObject json) {
+            return new ResourcePack(
+                    readBoolean(json, "enabled").orElse(DEFAULT.enabled()),
+                    readEnum(json, "format", Format.values(), Format::id).orElse(DEFAULT.format()),
+                    readString(json, "name").orElse(DEFAULT.name()),
+                    readString(json, "description").orElse(DEFAULT.description()),
+                    readString(json, "output_directory").orElse(DEFAULT.outputDirectory()),
+                    readInt(json, "pack_format").orElse(DEFAULT.packFormat()));
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            json.addProperty("enabled", this.enabled);
+            json.addProperty("format", this.format.id());
+            json.addProperty("name", this.name);
+            json.addProperty("description", this.description);
+            json.addProperty("output_directory", this.outputDirectory);
+            json.addProperty("pack_format", this.packFormat);
+            return json;
+        }
+
+        public enum Format {
+            FOLDER("folder"),
+            ZIP("zip"),
+            BOTH("both");
+
+            private final String id;
+
+            Format(String id) {
+                this.id = id;
+            }
+
+            public String id() {
+                return this.id;
+            }
         }
     }
 
@@ -552,6 +1167,7 @@ public record WtemConfig(
         private static final int HASH_LENGTH = 6;
 
         public KeyNaming {
+            scheme = scheme == null ? Scheme.STRUCTURED : scheme;
             if (randomLength < 1) randomLength = DEFAULT_RANDOM_LENGTH;
         }
 
@@ -562,7 +1178,9 @@ public record WtemConfig(
             /** Random letters, which keeps keys short but loses all context. */
             RANDOM("random"),
             /** A stable digest of the extraction path, short but reproducible across runs. */
-            HASHED("hashed");
+            HASHED("hashed"),
+            /** A semantic key proposed by the configured OpenAI-compatible endpoint. */
+            AI("ai");
 
             private final String id;
 

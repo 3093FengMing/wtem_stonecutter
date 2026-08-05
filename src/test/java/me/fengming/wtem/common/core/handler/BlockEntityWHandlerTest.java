@@ -9,6 +9,7 @@ import com.google.gson.JsonParser;
 import java.util.Map;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionRecord;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.util.NbtUtils;
 import net.minecraft.SharedConstants;
@@ -184,6 +185,50 @@ class BlockEntityWHandlerTest {
     }
 
     @Test
+    void catalogsWritableBookPagesStoredInALecternWithoutCorruptingThem() {
+        // Regression fixture derived from:
+        // /setblock 2 0 53 minecraft:lectern[...] {Book:{components:{...}}}
+        String firstPage =
+                " 붕어빵 기계는 우클릭을 하여 반죽을 구울 수 있다.\n\n"
+                        + " 왼쪽 흰색 종을 우클릭하여 장사를 시작할 수 있다.\n"
+                        + "붕어빵을 15번 팔면 장사가 종료되며 쉴 수 있다.\n\n"
+                        + " 흰색 종 옆 책을 우클릭 하여 현재 메뉴를 볼 수 있다.\n\n"
+                        + " 노란색 종을 우클릭하여 메뉴를 거절할 수 있다.";
+        String secondPage =
+                "[ 붕어빵 결합 ]\n\n 종 옆에 있는 화로를 활용하여 붕어빵을 제조 할 수 있다."
+                        + "\n\n 화로 위에 붕어빵 1개를 던지고 알맞는 아이템을 던지면 새로운 붕어빵"
+                        + " 반죽이 완성된다.\n\nex) 붕어빵 1개+슈크림 1개";
+        CompoundTag lectern =
+                nbt(
+                        """
+                        {"id":"minecraft:lectern","Book":{
+                          "components":{"minecraft:writable_book_content":{"pages":[
+                            {"raw":" 붕어빵 기계는 우클릭을 하여 반죽을 구울 수 있다.\\n\\n 왼쪽 흰색 종을 우클릭하여 장사를 시작할 수 있다.\\n붕어빵을 15번 팔면 장사가 종료되며 쉴 수 있다.\\n\\n 흰색 종 옆 책을 우클릭 하여 현재 메뉴를 볼 수 있다.\\n\\n 노란색 종을 우클릭하여 메뉴를 거절할 수 있다."},
+                            {"raw":"[ 붕어빵 결합 ]\\n\\n 종 옆에 있는 화로를 활용하여 붕어빵을 제조 할 수 있다.\\n\\n 화로 위에 붕어빵 1개를 던지고 알맞는 아이템을 던지면 새로운 붕어빵 반죽이 완성된다.\\n\\nex) 붕어빵 1개+슈크림 1개"}
+                          ]}},"count":1,"id":"minecraft:writable_book"},"Page":1}
+                        """);
+
+        // Nothing in the world can be rewritten: writable pages only accept plain strings.
+        assertFalse(new BlockEntityWHandler().handle(lectern));
+
+        assertEquals(
+                Map.of(
+                        "writable_book.1.content.page0", firstPage,
+                        "writable_book.1.content.page1", secondPage),
+                TranslationContext.snapshot());
+        assertTrue(TranslationContext.records().stream().noneMatch(ExtractionRecord::replaced));
+
+        CompoundTag book = NbtUtils.getCompound(lectern, "Book");
+        CompoundTag content =
+                NbtUtils.getCompound(
+                        NbtUtils.getCompound(book, "components"),
+                        "minecraft:writable_book_content");
+        assertEquals(
+                firstPage,
+                NbtUtils.getString(NbtUtils.getCompound(NbtUtils.getList(content, "pages"), 0), "raw"));
+    }
+
+    @Test
     void visitsItemsNestedInsideABlockEntityStoredOnAnItem() {
         // A shulker box in a chest: the item visitor hands the block entity data back to this
         // handler, which then visits the items inside it.
@@ -197,7 +242,9 @@ class BlockEntityWHandlerTest {
 
         assertTrue(new BlockEntityWHandler().handle(chest));
 
-        assertEquals(Map.of("item.stick.1.name", "Wand"), TranslationContext.snapshot());
+        assertEquals(
+                Map.of("item.shulker_box.1.item.stick.1.name", "Wand"),
+                TranslationContext.snapshot());
     }
 
     @Test
@@ -240,6 +287,28 @@ class BlockEntityWHandlerTest {
         assertTrue(new BlockEntityWHandler().handle(sign));
 
         assertEquals(Map.of("sign.1.front_text.0", "Shop"), TranslationContext.snapshot());
+    }
+
+    @Test
+    void writesSignTranslationsAsNbtComponentsRatherThanJsonInsideStrings() {
+        String command =
+                "setblock -7 17 6 minecraft:birch_wall_sign[facing=west,waterlogged=false]"
+                        + "{back_text:{color:\"black\",has_glowing_text:0b,messages:[\"\",\"\",\"\",\"\"]},"
+                        + "components:{},front_text:{color:\"black\",has_glowing_text:1b,messages:[\"\",\"Milk purchase (5)\",\"[ 1500 ]\",\"\"]},"
+                        + "is_waxed:0b}";
+
+        String result = FunctionHandler.processFunction(command);
+
+        assertTrue(result.contains("translate"), result);
+        //? if >=1.21.5 {
+        assertFalse(result.contains("'{\"translate\":"), result);
+        assertFalse(result.contains("\"{\\\"translate\\\":\""), result);
+        //?}
+        assertEquals(
+                Map.of(
+                        "sign.1.front_text.1", "Milk purchase (5)",
+                        "sign.1.front_text.2", "[ 1500 ]"),
+                TranslationContext.snapshot());
     }
 
     @Test

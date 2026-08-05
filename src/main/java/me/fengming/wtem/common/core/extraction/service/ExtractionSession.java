@@ -3,7 +3,6 @@ package me.fengming.wtem.common.core.extraction.service;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import me.fengming.wtem.common.core.extraction.ExtractionDiagnostics;
 import org.jetbrains.annotations.Nullable;
 
 /**

@@ -150,6 +150,26 @@ public final class TranslationUtils {
 
     /** Translates one component in an NBT list without changing the list's element type. */
     public static boolean translateNbtComponent(ListTag list, int index, String keyPath) {
+        return translateNbtComponent(list, index, keyPath, false);
+    }
+
+    /**
+     * Translates one component in a list and prefers the structured NBT representation.
+     *
+     * <p>Sign messages are a notable edge case.  On the current component codec a message may be
+     * represented directly by a compound ({@code {translate:"..."}}), while older releases only
+     * accepted a JSON string.  Keeping this choice here, next to the list mutation, prevents a
+     * sign's message list from accidentally containing a JSON object <em>inside</em> a StringTag.
+     * When a legacy ListTag rejects a mixed element type we fall back to the codec's JSON string,
+     * which is the only syntax that release can write back.
+     */
+    public static boolean translateNbtComponentAsStructured(
+            ListTag list, int index, String keyPath) {
+        return translateNbtComponent(list, index, keyPath, true);
+    }
+
+    private static boolean translateNbtComponent(
+            ListTag list, int index, String keyPath, boolean preferStructured) {
         if (list == null || index < 0 || index >= list.size()) return false;
 
         try (var transaction = TranslationContext.beginTransaction();
@@ -158,9 +178,18 @@ public final class TranslationUtils {
             Tag translatedTag =
                     translateNbtComponentTag(
                             originalTag,
-                            originalTag instanceof StringTag ? NbtUtils.getString(list, index) : null);
+                            originalTag instanceof StringTag ? NbtUtils.getString(list, index) : null,
+                            preferStructured);
             if (translatedTag == originalTag) return false;
-            if (!list.setTag(index, translatedTag)) return false;
+            if (!list.setTag(index, translatedTag)) {
+                // Prior to the heterogeneous ListTag implementation, a sign's StringTag list
+                // cannot hold a CompoundTag.  Preserve the translation for those versions in the
+                // representation their codec accepts instead of reporting a false negative.
+                if (!preferStructured || !(translatedTag instanceof CompoundTag)) return false;
+                Component translatedComponent = deserializeNbtComponent(translatedTag);
+                Tag legacy = StringTag.valueOf(serializeComponent(translatedComponent).toString());
+                if (!list.setTag(index, legacy)) return false;
+            }
             transaction.commit();
             return true;
         } catch (JsonParseException | IllegalStateException e) {
@@ -210,6 +239,11 @@ public final class TranslationUtils {
     }
 
     private static Tag translateNbtComponentTag(Tag originalTag, String stringValue) {
+        return translateNbtComponentTag(originalTag, stringValue, false);
+    }
+
+    private static Tag translateNbtComponentTag(
+            Tag originalTag, String stringValue, boolean preferStructured) {
         if (originalTag instanceof StringTag) {
             // A string tag means one of two different things. Legacy saves store a whole component
             // serialized to JSON in one, while the component format reads a string as the literal
@@ -233,7 +267,7 @@ public final class TranslationUtils {
             // field that already carried JSON keeps carrying it. Before 1.21.5 the component
             // argument parser only accepts the JSON form, so there structured NBT is not an option.
             //? if >=1.21.5 {
-            return serializedJson
+            return !preferStructured && serializedJson
                     ? StringTag.valueOf(serializeComponent(translated).toString())
                     : serializeNbtComponent(translated);
             //?} else

@@ -1,5 +1,6 @@
 package me.fengming.wtem.common.core.handler.datapack.command;
 
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.serialization.DynamicOps;
 import java.util.Comparator;
 import java.util.Optional;
@@ -17,6 +18,7 @@ import net.minecraft.core.component.TypedDataComponent;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.TagParser;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.Item;
@@ -62,7 +64,23 @@ public final class StructuredCommandArgumentAdapter {
 
     public static Optional<String> translateBlock(BlockInput input, String sourceArgument) {
         CompoundTag sourceTag = input.tag;
-        if (sourceTag == null || sourceTag.isEmpty()) return Optional.empty();
+        if (sourceTag == null || sourceTag.isEmpty()) {
+            // Some modern block codecs expose sign/block-entity data only through the original
+            // SNBT argument.  The parsed BlockInput is still authoritative for the block id, so
+            // recover the compound from the source spelling before giving up.  This also keeps
+            // command extraction aligned with direct region extraction.
+            int tagStart = sourceArgument.indexOf('{');
+            if (tagStart < 0) return Optional.empty();
+            try {
+                //? if >=1.21.5 {
+                sourceTag = TagParser.parseCompoundFully(sourceArgument.substring(tagStart));
+                //?} else {
+                /*sourceTag = TagParser.parseTag(sourceArgument.substring(tagStart));
+                *///?}
+            } catch (CommandSyntaxException | RuntimeException ignored) {
+                return Optional.empty();
+            }
+        }
 
         CompoundTag translatedTag = sourceTag.copy();
         boolean temporaryId = !translatedTag.contains("id");
@@ -74,6 +92,7 @@ public final class StructuredCommandArgumentAdapter {
                     //input.getState().getBlockHolder();
             blockHolder.unwrapKey()
                     .map(ResourceIds::key)
+                    .map(StructuredCommandArgumentAdapter::blockEntityId)
                     .ifPresent(id -> translatedTag.putString("id", id));
         }
 
@@ -85,6 +104,19 @@ public final class StructuredCommandArgumentAdapter {
             throw new IllegalStateException("Parsed block argument has NBT but no SNBT source");
         }
         return Optional.of(sourceArgument.substring(0, tagStart) + translatedTag);
+    }
+
+    /** Maps a coloured block-state id to the shared block-entity id used by its NBT schema. */
+    private static String blockEntityId(String blockId) {
+        if (blockId == null || blockId.isBlank()) return blockId;
+        int namespace = blockId.indexOf(':');
+        String path = namespace < 0 ? blockId : blockId.substring(namespace + 1);
+        String prefix = namespace < 0 ? "" : blockId.substring(0, namespace + 1);
+        if (path.endsWith("_wall_sign") || "sign".equals(path)) return prefix + "sign";
+        if (path.endsWith("_hanging_sign") || "hanging_sign".equals(path)) {
+            return prefix + "hanging_sign";
+        }
+        return blockId;
     }
 
     private static String serializeItem(

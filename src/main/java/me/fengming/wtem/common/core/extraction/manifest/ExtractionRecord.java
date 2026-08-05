@@ -12,8 +12,15 @@ package me.fengming.wtem.common.core.extraction.manifest;
  * @param text the original text the key replaced
  * @param origin where the text was found
  * @param reused whether the key already existed, so this occurrence added no catalog entry
+ * @param replaced whether the source value was replaced with a translatable component
  */
-public record ExtractionRecord(String key, String text, ExtractionOrigin origin, boolean reused) {
+public record ExtractionRecord(
+        String key, String text, ExtractionOrigin origin, boolean reused, boolean replaced) {
+    /** Source compatibility for records created before catalog-only extraction was supported. */
+    public ExtractionRecord(String key, String text, ExtractionOrigin origin, boolean reused) {
+        this(key, text, origin, reused, true);
+    }
+
     public ExtractionRecord {
         origin = origin == null ? ExtractionOrigin.UNKNOWN : origin;
     }

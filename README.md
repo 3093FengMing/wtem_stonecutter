@@ -37,6 +37,7 @@ WTEM 是一个纯客户端的 Fabric 模组，用于把 Minecraft 世界、世�
 - 记分板队伍、目标和分数显示名称。
 - 自定义 Bossbar 名称。
 - 世界 `generated/<namespace>/structure(s)` 中实际存在的 NBT 结构。
+- 世界 `data/` 目录下全部（包括子目录中的）压缩 `*.dat` SavedData 文件；使用保守的文本字段识别，并可按文件和内部路径过滤。
 
 数据包：
 
@@ -46,6 +47,8 @@ WTEM 是一个纯客户端的 Fabric 模组，用于把 Minecraft 世界、世�
 - 函数中的文本组件参数、`summon` 命令 `nbt` 参数中的实体文本，以及解析为物品或方块实体的参数，如 `give` 的物品组件、`setblock` 和 `fill` 的方块实体 NBT。
 
 函数文件替换失败时整条命令会保持原样，并记录警告。`give` 等命令的物品组件按组件 ID 排序回写，因此同一份数据包重复提取的输出保持一致。
+
+对于原版函数宏，WTEM 会先为当前数据包建立只读调用索引。`function ... with storage ...`、`data modify storage ... set value` 和 `data merge storage ...` 均由 Minecraft 的 Brigadier/NBT 解析器识别；同一调用点的整组参数保持关联，逐字段写入的 storage 也会在调用点合并。每组可确定的 caller 实参都会替换命令中任意位置的 `$(name)`，替换后的完整命令按普通命令提取，随后恢复宏，并把恢复结果重新套用到所有可解析 caller 上验证。宏作为动态 `translate` 键时，每个静态可知的运行时键会以“键 = 原文”的形式加入语言目录并产生警告，供翻译者补译。`execute store`、计分板/随机数、实体或方块运行时 NBT、动态函数 ID/路径和复杂跨函数控制流无法可靠静态求值时，WTEM 会保留宏并警告，而不会猜测参数。
 
 ## 输出内容
 
@@ -61,7 +64,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 
 遇到相同文本时，翻译键默认复用同一个键，可以在下方的配置中设置复用策略。
 
-部分内容无法替换为翻译组件时，会记录警告。包括：书与笔、成书的作者名。
+书与笔的 `writable_book_content.pages[*].raw` 是普通字符串，无法承载翻译组件。WTEM 会把它们加入语言文件和提取报告，但保持存档原文不变；报告中的 `replaced=false` 可识别这类仅编目的条目。成书作者名等其他纯字符串仍保持原样并记录警告。
 
 ### 提取报告
 
@@ -77,12 +80,15 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 | `location` | 数据存放的位置，维度与区块、数据包与资源 ID，或结构文件。                                                                                               |
 | `subject`  | 数据的父子对象，由外到内用 ` > ` 连接，例如 `minecraft:chest (12, 64, -30) > minecraft:shulker_box`。方块实体和实体带坐标，物品与嵌套数据接在容器之后。 |
 | `reused`   | 该处文本是否复用了已有的键。`true` 表示它没有新增语言文件条目，改动这个键会同时影响多处。                                                               |
+| `replaced` | 原始世界/数据包值是否已经替换为翻译组件。`false` 表示只加入目录，例如讲台中书与笔的普通字符串页面。                                                       |
 
 同一个键出现在多处时，语言文件只有一条，报告则每处一行，因此报告的行数通常多于语言文件的条目数。取消提取或中途失败时，已写入的部分会连同语言文件一起写出。
 
 ## 配置
 
 首次启动会在 `config/wtem.json` 生成默认配置，其中把每一项都按默认值写全，可以直接在上面改。文件中的每一项都是可选的，删掉或不填写时即保持默认行为。
+
+提取页面的“选择来源”按钮会打开只包含数据包、SavedData 文件和实体/方块实体类型选择的 YACL 界面；“配置”按钮用于其余提取设置。保存采用原子替换；在外部编辑 `wtem.json` 也会自动热重载。正在运行的提取使用启动时快照，修改只影响下一次运行。
 
 ```json
 {
@@ -92,7 +98,8 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
     "scoreboard": true,
     "boss_bar": true,
     "datapacks": true,
-    "generated_structures": true
+    "generated_structures": true,
+    "storage": true
   },
   "resources": {
     "advancement": true,
@@ -119,7 +126,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
     "random_length": 8
   },
   "nbt_max_depth": 32,
-  "rebuild_nested_keys": true,
+  "rebuild_nested_keys": false,
   "skipped": {
     "command_block_output": true,
     "filtered_text": true
@@ -141,24 +148,71 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
     "wtem.8": "8",
     "wtem.9": "9"
   },
-  "language_file": "en_us.json"
+  "language_file": "en_us.json",
+  "filters": {
+    "region": [],
+    "datapack": [],
+    "storage": [],
+    "entity": [],
+    "block_entity": [],
+    "selection": {
+      "datapacks": [],
+      "entities": [],
+      "block_entities": [],
+      "storage_files": []
+    }
+  },
+  "outputs": {
+    "export_region_snbt": false,
+    "export_schema": false,
+    "region_snbt_directory": "wtem/regions",
+    "schema_file": "wtem-schema.json"
+  },
+  "ai_translation": {
+    "enabled": false,
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "api_key": "",
+    "model": "gpt-4o-mini",
+    "target_language": "zh-CN",
+    "output_file": "zh_cn.json",
+    "batch_size": 40,
+    "timeout_seconds": 60,
+    "translation_prompt": "Translate the values of the supplied JSON object into {target_language}. Return only one JSON object with exactly the same keys. Preserve Minecraft formatting codes, placeholders such as %s and %1$s, escape sequences, whitespace, and intentional line breaks. Do not translate JSON keys, commands, identifiers, or formatting tokens.",
+    "key_naming_prompt": "Create one concise semantic Minecraft translation key for the supplied text and suggested_path. Return only a JSON object in the form {\"key\":\"...\"}. Use lowercase ASCII letters, digits, underscores, and dots only. Prefer the source category (item, entity, block, sign, book, or datapack) as the first segment and preserve the semantic role such as .name, .title, or .description as the last segment. Translate the meaning into concise English key words even when the visible text is in another language. Describe the visible text rather than the material id: for example, The Best Sword on a wooden sword should be item.the_best_sword.name. Never include numeric occurrence indexes."
+  },
+  "resource_pack": {
+    "enabled": true,
+    "format": "both",
+    "name": "wtem_translations",
+    "description": "WTEM translations",
+    "output_directory": "resourcepacks",
+    "pack_format": 0
+  }
 }
 ```
 
-- `stages`：控制是否执行该提取阶段。`region` 对应方块实体，`entities` 对应实体，其余对应记分板、bossbar、数据包和生成结构。默认为启用。
+- `stages`：控制是否执行该提取阶段。`region` 对应方块实体，`entities` 对应实体，`storage` 递归读取 `data/` 下全部 `*.dat`，其余对应记分板、bossbar、数据包和生成结构。默认为启用。
 - `resources`：控制是否提取该数据包资源类型，键为注册目录名。生成的文件会列出当前版本实际支持的全部类型。默认为启用。
 - `key_reuse`：相同文本是否复用已有的翻译键。`default` 是全局策略，`overrides` 按键前缀覆盖，命中的最长前缀生效。需要同一段文本在不同位置分别翻译时把对应前缀设为 `false`，例如 `{"datapack.": false}` 让数据包中的文本各自成键。
 - `key_naming`：翻译键的命名方式，详见下一节。
 - `nbt_max_depth`：NBT 递归提取的层数上限。超出上限的数据保持原样。小于 1 的值按默认值 32 处理。
-- `rebuild_nested_keys`：物品上的 `block_entity_data` 是否用自己的键从头命名。默认 `true`，例如不考虑复用的情况下，一把在潜影盒中的木剑在无论在哪里都得到形如 `item.wooden_sword.1.name`。若为 `false` ，则形如 `item.shulker_box.1.container.wooden_sword.1.name`。
+- `rebuild_nested_keys`：物品上的 `block_entity_data` 是否用自己的键从头命名。默认 `false`，例如不考虑复用的情况下，一把在潜影盒中的木剑会得到形如 `item.shulker_box.1.container.wooden_sword.1.name`。若为 `true`，则从嵌套物品重新开始命名，形如 `item.wooden_sword.1.name`。
 - `skipped`：是否要跳过一些特殊文本，详见下一节。
-- `skipped_paths`：跳过数据包 `data/` 下指定目录中的资源，被跳过的资源不会写入伴生数据包。新规则采用资源位置格式 `<命名空间>:<资源路径>`；例如 `animated_java:function` 匹配 `data/animated_java/function/**`。资源路径写为 `*` 可跳过整个命名空间。
+- `skipped_paths`：跳过数据包 `data/` 下指定目录中的资源，被跳过的资源不会写入伴生数据包。新规则采用资源位置格式 `<命名空间>:<资源路径>`；例如 `animated_java:function` 匹配 `data/animated_java/function/**`。资源路径写为 `*` 可跳过整个命名空间。它作为旧配置兼容字段，与 `filters.datapack` 在同一来源过滤流程中共同生效。
 - `language_file`：写入世界目录的语言文件名。只接受纯文件名，包含路径分隔符或非 `.json` 后缀时会被忽略。
 - `builtin_entries`：预置在语言文件中的条目。提取到的文本若与某条预置文本相同，就直接复用它的键，不再单独占一个键。默认预置空字符串、空格和 0~9。整段留空对象 `{}` 表示不预置任何条目；整段删掉则保持默认。
+
+- `filters`：统一的来源过滤。普通规则表示包含，`!` 开头表示排除，`*`/`?` 是通配符，排除优先。区域位置为 `dimension/chunk/x_z`，数据包位置为 `pack/namespace:path`，SavedData 位置为 `<data 下相对文件>.dat/<NBT 路径>`；`entity` 和 `block_entity` 匹配完整命名空间类型 ID。
+- `filters.selection`：提取界面的精确选择结果。数据包和 SavedData 文件来自当前世界；实体/方块实体选项来自当前游戏版本注册表（为了打开界面时不再完整扫描所有 region，并不表示每种类型都已在世界中出现）。空列表表示全部，包括以后新增的值；在界面中全部取消会保存为内部哨兵 `["!none"]`，表示明确不选任何项。
+- `outputs`：可开启按区块导出 SNBT，以及在世界根目录写入机器可读的 schema JSON。
+- `ai_translation`：启用后会分批向 OpenAI 兼容 chat-completions 接口发送条目；`translation_prompt` 支持 `{target_language}` 占位符，`key_naming_prompt` 用于可选的 AI 语义键命名。未填写 API 密钥时翻译目标文件会回退为普通语言文件的原样副本；AI 键名会回退为结构化键。请求失败只产生警告，不会丢弃普通语言文件。
+- `resource_pack`：在世界相对目录中导出文件夹、ZIP 或两者，内容包括 `pack.mcmeta` 和 `assets/wtem/lang/` 下的语言文件，默认开启。
 
 ### 跳过的文本
 
 两项都默认 `true`。改为 `true` 时对应文本不进入语言文件，存档中的原文也保持不变。
+
+这两项是“内容策略”，不是来源选择，因此没有强行并入 `filters`；`skipped_paths` 则是数据包来源路径规则，已经在配置界面归入过滤规则并与 `filters.datapack` 一起执行。
 
 - `command_block_output`：命令方块和命令方块矿车缓存的上一次执行结果（`LastOutput`）。
 - `filtered_text`：告示牌行和成书页的聊天过滤副本（`filtered_messages` / `filtered`）。
@@ -169,6 +223,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
   - `structured`（默认）：按提取位置生成可读的键，例如 `entity.zombie.1.name`。由于提取的无序性，重复提取不保证一致
   - `hashed`：用提取位置的 `hash` 生成键，形如 `wtem.<hash>`。同一份存档重复提取得到相同的键。
   - `random`：随机字母，形如 `wtem.<random>`。键与提取位置无关，重复提取不保证一致。
+  - `ai`：把原文和建议路径发送给配置的 OpenAI 兼容接口，生成语义键。例如木剑名 `The Best Sword` 可得到 `item.the_best_sword.name`。响应必须是合法的小写点分键；缺少密钥、响应无效或第一次请求失败时，本次提取其余条目都回退为结构化键，避免连续超时。
 - `random_length`：`random` 方式下随机字母的位数，默认 8。
 
 ## 开发与构建

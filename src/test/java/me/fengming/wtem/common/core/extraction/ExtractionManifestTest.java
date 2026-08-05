@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
  */
 class ExtractionManifestTest {
     private static final String HEADER =
-            "\"key\",\"text\",\"source\",\"location\",\"subject\",\"reused\"\r\n";
+            "\"key\",\"text\",\"source\",\"location\",\"subject\",\"reused\",\"replaced\"\r\n";
 
     @Test
     void writesAHeaderRowEvenWithNothingToReport() {
@@ -36,9 +36,9 @@ class ExtractionManifestTest {
         assertEquals(
                 HEADER
                         + "\"container.chest.1.name\",\"Loot\",\"region\","
-                        + "\"minecraft:overworld chunk [1, 2]\",\"minecraft:chest\",\"false\"\r\n"
+                        + "\"minecraft:overworld chunk [1, 2]\",\"minecraft:chest\",\"false\",\"true\"\r\n"
                         + "\"item.stick.1.name\",\"Wand\",\"region\","
-                        + "\"minecraft:overworld chunk [1, 2]\",\"minecraft:chest\",\"true\"\r\n",
+                        + "\"minecraft:overworld chunk [1, 2]\",\"minecraft:chest\",\"true\",\"true\"\r\n",
                 csv);
     }
 
@@ -58,7 +58,7 @@ class ExtractionManifestTest {
         assertEquals(
                 HEADER
                         + "\"sign.1.front_text.0\",\"Say \"\"hi\"\", then\nleave\",\"\",\"\",\"\","
-                        + "\"false\"\r\n",
+                        + "\"false\",\"true\"\r\n",
                 csv);
     }
 
@@ -76,7 +76,26 @@ class ExtractionManifestTest {
                                         false)));
 
         assertEquals(
-                HEADER + "\"block.command_block\",\"Welcome\",\"region\",\"\",\"\",\"false\"\r\n",
+                HEADER + "\"block.command_block\",\"Welcome\",\"region\",\"\",\"\",\"false\",\"true\"\r\n",
+                csv);
+    }
+
+    @Test
+    void marksCatalogOnlyTextAsNotReplaced() {
+        String csv =
+                ExtractionManifest.render(
+                        List.of(
+                                new ExtractionRecord(
+                                        "writable_book.1.content.page0",
+                                        "Notes",
+                                        ExtractionOrigin.of("region"),
+                                        false,
+                                        false)));
+
+        assertEquals(
+                HEADER
+                        + "\"writable_book.1.content.page0\",\"Notes\",\"region\",\"\",\"\","
+                        + "\"false\",\"false\"\r\n",
                 csv);
     }
 

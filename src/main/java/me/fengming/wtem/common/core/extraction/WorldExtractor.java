@@ -3,11 +3,19 @@ package me.fengming.wtem.common.core.extraction;
 import com.mojang.datafixers.DataFixer;
 import me.fengming.wtem.common.Wtem;
 import me.fengming.wtem.common.config.WtemConfig;
+import me.fengming.wtem.common.core.extraction.ai.AiKeyNamer;
+import me.fengming.wtem.common.core.extraction.export.AiTranslationExporter;
+import me.fengming.wtem.common.core.extraction.export.ExtractionSchema;
+import me.fengming.wtem.common.core.extraction.export.ResourcePackExporter;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionManifest;
 import me.fengming.wtem.common.core.extraction.service.ExtractionProgress;
+import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.extraction.service.ExtractionReport;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 import me.fengming.wtem.common.core.extraction.service.ExtractionStatus;
-import me.fengming.wtem.common.core.extraction.manifest.ExtractionManifest;
+import me.fengming.wtem.common.core.extraction.source.GeneratedStructureExtractor;
+import me.fengming.wtem.common.core.extraction.source.SavedDataExtractor;
+import me.fengming.wtem.common.core.extraction.source.CustomScoreBoard;
 import me.fengming.wtem.common.core.handler.AbstractWHandler;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.core.handler.EntityWHandler;
@@ -99,7 +107,8 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     private final LevelStorageSource.LevelStorageAccess levelStorage;
     private final RegistryAccess registry;
     private final StructureTemplateManager structureManager;
-    private final WtemConfig config = WtemConfig.active();
+    /** Snapshot for one run; refreshed immediately before the worker thread starts. */
+    private volatile WtemConfig config = WtemConfig.active();
 
     public WorldExtractor(DataFixer dataFixer,
                           WorldStem worldStem,
@@ -139,6 +148,11 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     public boolean startThread() {
         if (!this.session.start()) return false;
+
+        // WtemScreen can stay open while the user edits settings in the YACL child screen.  Capture
+        // the resulting configuration here, after that screen has closed, and keep it stable for
+        // the complete run.
+        this.config = WtemConfig.active();
 
         try {
             this.thread.start();
@@ -220,19 +234,29 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             if (shouldStop()) return;
             String packId = pack.packId();
             if (isGeneratedCompanionPack(packId)) continue;
+            if (!this.config.filters().selection().matchesDatapack(packId)) continue;
 
             String outputPackId = sanitizePackId(packId) + "_" + shortHash(packId) + "_wtem";
             Path outputRoot = datapackDir.resolve(outputPackId);
             Path staging = null;
             try (var transaction = TranslationContext.beginTransaction();
                     var ignored = TranslationContext.pushLocation(packId)) {
+                int recordsBefore = TranslationContext.recordCount();
                 staging = DirectoryPublisher.createStagingDirectory(outputRoot);
                 Path stagingRoot = staging;
+                // Function macros are parsed after all functions in this pack have been indexed,
+                // so a caller that appears later alphabetically can still provide values to an
+                // earlier callee.
+                FunctionHandler.initializeMacroCallGraph(collectFunctionSources(pack));
                 int modifiedResources =
                         extractPackMetadata(
                                         pack,
                                         stagingRoot.resolve("pack.mcmeta"),
-                                        outputPackId)
+                                        outputPackId,
+                                        this.config
+                                                .filters()
+                                                .matchesDatapack(
+                                                        packId, packId + "/pack.mcmeta"))
                                 ? 1
                                 : 0;
 
@@ -257,8 +281,10 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                                 (id, supplier) ->
                                         {
                                             if (handler.accepts(id)
-                                                    && !this.config.isPathSkipped(
-                                                            id.getNamespace(), id.getPath())) {
+                                                    && this.config.matchesDatapackResource(
+                                                            packId,
+                                                            id.getNamespace(),
+                                                            id.getPath())) {
                                                 resources.put(
                                                         id.toString(),
                                                         new PackResource(id, supplier));
@@ -275,7 +301,12 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
                 if (shouldStop()) continue;
                 boolean replacingPreviousOutput = Files.exists(outputRoot);
-                if (modifiedResources == 0 && !replacingPreviousOutput) continue;
+                if (modifiedResources == 0 && !replacingPreviousOutput) {
+                    if (TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
+                        transaction.commit();
+                    }
+                    continue;
+                }
 
                 DirectoryPublisher.publish(staging, outputRoot);
                 staging = null;
@@ -286,6 +317,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                 this.session.diagnostics().record("datapack", packId, exception);
                 Wtem.LOGGER.error("Failed to extract data pack {}", packId, exception);
             } finally {
+                FunctionHandler.releaseMacroCallGraph();
                 if (staging != null) {
                     try {
                         DirectoryPublisher.discard(staging);
@@ -300,6 +332,31 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                 }
             }
         }
+    }
+
+    private Map<String, String> collectFunctionSources(PackResources pack) {
+        Map<String, String> sources = new TreeMap<>();
+        for (String namespace : pack.getNamespaces(PackType.SERVER_DATA).stream().sorted().toList()) {
+            pack.listResources(
+                    PackType.SERVER_DATA,
+                    namespace,
+                    "function",
+                    (id, supplier) -> {
+                        if (!id.getPath().endsWith(".mcfunction")) return;
+                        // Source filters decide what is extracted and written, not which callers
+                        // exist. A skipped Animated Java helper can still pass concrete arguments to
+                        // a selected macro function, so index every function in this already-selected
+                        // world pack read-only.
+                        try (InputStream input = supplier.get()) {
+                            sources.put(
+                                    id.getNamespace() + ":" + id.getPath(),
+                                    new String(input.readAllBytes(), StandardCharsets.UTF_8));
+                        } catch (Exception exception) {
+                            this.session.diagnostics().record("function_index", id.toString(), exception);
+                        }
+                    });
+        }
+        return sources;
     }
 
     private static String sanitizePackId(String packId) {
@@ -324,7 +381,8 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         }
     }
 
-    private static boolean extractPackMetadata(PackResources pack, Path output, String packId) {
+    private static boolean extractPackMetadata(
+            PackResources pack, Path output, String packId, boolean translateDescription) {
         var supplier = pack.getRootResource("pack.mcmeta");
         if (supplier == null) {
             throw new IllegalStateException("Data pack has no pack.mcmeta: " + pack.packId());
@@ -336,8 +394,9 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         }
         TranslationContext.setKey("datapack." + packId.replace('.', '_'));
         boolean changed =
-                TranslationUtils.translateJsonElement(
-                        metadata.getAsJsonObject(), "pack.description");
+                translateDescription
+                        && TranslationUtils.translateJsonElement(
+                                metadata.getAsJsonObject(), "pack.description");
         ResourceIo.writeJson(output, metadata);
         return changed;
     }
@@ -530,6 +589,16 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         runStage(WtemConfig.Stage.BOSS_BAR, this::extractBossBar);
         runStage(WtemConfig.Stage.DATAPACKS, this::extractDatapacks);
         runStage(WtemConfig.Stage.GENERATED_STRUCTURES, this::extractStructures);
+        runStage(
+                WtemConfig.Stage.STORAGE,
+                () ->
+                        new SavedDataExtractor(
+                                        this.levelStorage
+                                                .getLevelPath(LevelResource.ROOT)
+                                                .resolve("data"),
+                                        this.config,
+                                        this.session)
+                                .extract());
     }
 
     private void runStage(WtemConfig.Stage stage, Runnable extraction) {
@@ -543,8 +612,13 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     private void beginRun() {
         TranslationContext.clear();
+        TranslationContext.setConfig(this.config);
         TranslationContext.setKeyReuse(this.config.keyReuse());
         TranslationContext.setKeyNaming(this.config.keyNaming());
+        TranslationContext.setAiKeyNamer(
+                this.config.keyNaming().scheme() == WtemConfig.KeyNaming.Scheme.AI
+                        ? new AiKeyNamer(this.config.aiTranslation(), this.session)
+                        : null);
         TranslationContext.setBuiltinEntries(this.config.builtinEntries());
     }
 
@@ -563,6 +637,9 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
         exportLanguage(languageOutput());
         exportManifest();
+        exportSchema();
+        Path aiFile = exportAiTranslation();
+        exportResourcePack(aiFile);
         this.session.complete();
         logDiagnostics();
     }
@@ -586,14 +663,16 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     }
 
     private void publishPartialLanguage() {
-        if (TranslationContext.extractedEntryCount() == 0) return;
-        try {
-            exportLanguage(languageOutput());
-        } catch (RuntimeException exception) {
-            this.session.diagnostics().record("language", languageOutput().toString(), exception);
-            Wtem.LOGGER.error("Failed to publish partial language catalog", exception);
+        if (TranslationContext.extractedEntryCount() > 0) {
+            try {
+                exportLanguage(languageOutput());
+            } catch (RuntimeException exception) {
+                this.session.diagnostics().record("language", languageOutput().toString(), exception);
+                Wtem.LOGGER.error("Failed to publish partial language catalog", exception);
+            }
         }
         exportManifest();
+        exportSchema();
     }
 
     private void exportManifest() {
@@ -605,6 +684,72 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             this.session.diagnostics().record("manifest", file.toString(), exception);
             Wtem.LOGGER.error("Failed to write the extraction report", exception);
         }
+    }
+
+    private void exportSchema() {
+        if (!this.config.outputs().exportSchema()) return;
+        Path file = levelRoot().resolve(this.config.outputs().schemaFile()).normalize();
+        if (!file.startsWith(levelRoot().normalize())) {
+            this.session.diagnostics().record(
+                    "schema", file.toString(), new IllegalArgumentException("Schema path escapes world root"));
+            return;
+        }
+        if (file.equals(languageOutput().normalize())) {
+            this.session.diagnostics().record(
+                    "schema",
+                    file.toString(),
+                    new IllegalArgumentException("Schema output must not replace the primary language file"));
+            return;
+        }
+        try {
+            ResourceIo.writeString(file, ExtractionSchema.render(this.config, TranslationContext.records()));
+        } catch (RuntimeException exception) {
+            this.session.diagnostics().record("schema", file.toString(), exception);
+            Wtem.LOGGER.error("Failed to write extraction schema", exception);
+        }
+    }
+
+    private Path exportAiTranslation() {
+        if (!this.config.aiTranslation().enabled()) return null;
+        Path file = levelRoot().resolve(this.config.aiTranslation().outputFile()).normalize();
+        if (!file.startsWith(levelRoot().normalize())) {
+            this.session.diagnostics().record(
+                    "ai_translation", file.toString(), new IllegalArgumentException("AI output path escapes world root"));
+            return null;
+        }
+        if (file.equals(languageOutput().normalize())) {
+            this.session.diagnostics().record(
+                    "ai_translation",
+                    file.toString(),
+                    new IllegalArgumentException("AI output must not replace the primary language file"));
+            return null;
+        }
+        Path schemaFile =
+                levelRoot().resolve(this.config.outputs().schemaFile()).normalize();
+        if (this.config.outputs().exportSchema() && file.equals(schemaFile)) {
+            this.session.diagnostics().record(
+                    "ai_translation",
+                    file.toString(),
+                    new IllegalArgumentException("AI output must not replace the extraction schema"));
+            return null;
+        }
+        return AiTranslationExporter.export(
+                        this.config.aiTranslation(),
+                        file,
+                        TranslationContext.snapshot(),
+                        this.session)
+                ? file
+                : null;
+    }
+
+    private void exportResourcePack(Path aiFile) {
+        if (!this.config.resourcePack().enabled()) return;
+        ResourcePackExporter.export(
+                this.config.resourcePack(),
+                levelRoot(),
+                languageOutput(),
+                aiFile,
+                this.session);
     }
 
     private Path languageOutput() {
@@ -658,6 +803,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     //~if >= 26.1 'SimpleRegionStorageUpgrader' -> 'RegionStorageUpgrader'
     public class ChunkExtractor extends RegionStorageUpgrader {
         private final AbstractWHandler<CompoundTag> handler;
+        private final String folderName;
 
         protected ChunkExtractor(AbstractWHandler<CompoundTag> handler, DataFixTypes type, String folderName/*?if >=26.1 >>')'*/, int previousCopiesFileAmounts) {
             //? if >= 26.1 {
@@ -666,6 +812,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             /*super(type, folderName, STATUS_EXTRACTING, STATUS_FINISHED_EXTRACTION);
             *///?}
             this.handler = handler;
+            this.folderName = folderName;
         }
 
         @Override
@@ -681,13 +828,22 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         }
 
         private boolean process(SimpleRegionStorage storage, ChunkPos chunkPos, CompoundTag compoundTag) {
+            String dimension = ResourceIds.key(storage.storageInfo().dimension());
+            String regionLocation =
+                    dimension + "/chunk/" + chunkX(chunkPos) + "_" + chunkZ(chunkPos);
+            if (!WorldExtractor.this.config.filters().matchesRegion(regionLocation)) return false;
+
+            if ("region".equals(this.folderName)
+                    && WorldExtractor.this.config.outputs().exportRegionSnbt()) {
+                exportRegionSnbt(dimension, chunkPos, compoundTag, regionLocation);
+            }
             ListTag list = NbtUtils.getList(compoundTag, handler.getName(), Tag.TAG_COMPOUND);
             if (list.isEmpty()) return false;
 
             ChangeTracker tracker = new ChangeTracker();
             try (var ignored =
                     TranslationContext.pushLocation(
-                            ResourceIds.key(storage.storageInfo().dimension()))) {
+                            regionLocation)) {
                 for (int i = 0; i < list.size(); i++) {
                     tracker.add(this.handler.handle(NbtUtils.getCompound(list, i)));
                 }
@@ -697,6 +853,45 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             this.previousWriteFuture = storage.write(chunkPos, /*?if >=26.1 >>'compoundTag'*/() -> compoundTag);
             WorldExtractor.this.session.recordModifiedChunk();
             return true;
+        }
+
+        private void exportRegionSnbt(
+                String dimension, ChunkPos chunkPos, CompoundTag compoundTag, String location) {
+            try {
+                Path dimensionDirectory =
+                        levelRoot()
+                                .resolve(WorldExtractor.this.config.outputs().regionSnbtDirectory())
+                                .resolve(safeOutputSegment(dimension));
+                Path output =
+                        dimensionDirectory.resolve(
+                                "chunk_" + chunkX(chunkPos) + "_" + chunkZ(chunkPos) + ".snbt");
+                ResourceIo.writeString(output, compoundTag.toString());
+                WorldExtractor.this.session.recordModifiedResource();
+            } catch (RuntimeException exception) {
+                WorldExtractor.this.session.diagnostics().record("region_snbt", location, exception);
+                Wtem.LOGGER.warn("Failed to export region SNBT {}", location, exception);
+            }
+        }
+
+        private String safeOutputSegment(String value) {
+            String sanitized = value.replace(':', '_').replace('/', '_').replace('\\', '_');
+            return sanitized.replaceAll("[^A-Za-z0-9._-]", "_");
+        }
+
+        private int chunkX(ChunkPos chunkPos) {
+            //? if >=26.1 {
+            return chunkPos.x();
+            //?} else {
+            /*return chunkPos.x;
+            *///?}
+        }
+
+        private int chunkZ(ChunkPos chunkPos) {
+            //? if >=26.1 {
+            return chunkPos.z();
+            //?} else {
+            /*return chunkPos.z;
+            *///?}
         }
     }
 }

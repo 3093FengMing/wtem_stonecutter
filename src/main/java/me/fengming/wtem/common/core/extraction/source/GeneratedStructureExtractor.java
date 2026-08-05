@@ -1,4 +1,4 @@
-package me.fengming.wtem.common.core.extraction;
+package me.fengming.wtem.common.core.extraction.source;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import me.fengming.wtem.common.Wtem;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 import me.fengming.wtem.common.core.handler.StructureTemplateWHandler;
 import me.fengming.wtem.common.util.ResourceIo;
@@ -53,9 +54,15 @@ public final class GeneratedStructureExtractor {
         try (var transaction = TranslationContext.beginTransaction();
                 var ignored = TranslationContext.pushLocation(resource);
                 var input = Files.newInputStream(structureFile)) {
+            int recordsBefore = TranslationContext.recordCount();
             var source = NbtIo.readCompressed(input, NbtAccounter.unlimitedHeap());
             StructureTemplateWHandler.Result result = new StructureTemplateWHandler().process(source);
-            if (!result.changed()) return;
+            if (!result.changed()) {
+                if (TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
+                    transaction.commit();
+                }
+                return;
+            }
             ResourceIo.writeNbt(structureFile, result.tag());
             transaction.commit();
             this.session.recordModifiedResource();

@@ -1,7 +1,6 @@
 package me.fengming.wtem.common.core.extraction.service;
 
 import java.util.List;
-import me.fengming.wtem.common.core.extraction.ExtractionDiagnostics;
 import org.jetbrains.annotations.Nullable;
 
 /**

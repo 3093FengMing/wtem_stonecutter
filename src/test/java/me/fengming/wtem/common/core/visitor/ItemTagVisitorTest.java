@@ -141,8 +141,9 @@ class ItemTagVisitorTest {
     }
 
     @Test
-    void leavesBookAndQuillPagesUntranslated() {
-        // writable_book_content pages are plain strings, so they cannot carry a translatable node.
+    void catalogsBookAndQuillPagesWithoutRewritingTheirPlainStrings() {
+        // writable_book_content pages are plain strings, so they cannot carry a translatable node,
+        // but translators and the optional AI exporter must still receive their text.
         CompoundTag item = nbt("""
                 {"id":"minecraft:writable_book","components":{
                   "minecraft:writable_book_content":{"pages":[{"raw":"Notes"}]}}}
@@ -152,7 +153,10 @@ class ItemTagVisitorTest {
         item.accept(visitor);
 
         assertFalse(visitor.isChanged());
-        assertEquals(Map.of(), TranslationContext.snapshot());
+        assertEquals(
+                Map.of("writable_book.1.content.page0", "Notes"),
+                TranslationContext.snapshot());
+        assertFalse(TranslationContext.records().getFirst().replaced());
     }
 
     @Test
@@ -262,11 +266,10 @@ class ItemTagVisitorTest {
     }
 
     @Test
-    void rebuildsTheKeyOfANestedBlockEntityByDefault() {
-        // A shulker box in a chest names itself from scratch, so the same box produces the same key
-        // no matter where it was found.
+    void extendsTheKeyOfANestedBlockEntityByDefault() {
+        // Nested block-entity data extends the owning item key by default.
         assertEquals(
-                Map.of("container.shulker_box.1.name", "Loot"),
+                Map.of("item.shulker_box.1.container.shulker_box.1.name", "Loot"),
                 visit(
                         """
                         {"id":"minecraft:shulker_box","components":{
@@ -276,7 +279,7 @@ class ItemTagVisitorTest {
     }
 
     @Test
-    void extendsTheItemKeyForANestedBlockEntityWhenConfigured() {
+    void rebuildsTheKeyOfANestedBlockEntityWhenConfigured() {
         ConfigOverride.run(
                 new WtemConfig(
                         Map.of(),
@@ -284,14 +287,14 @@ class ItemTagVisitorTest {
                         WtemConfig.KeyReuse.DEFAULT,
                         WtemConfig.KeyNaming.DEFAULT,
                         WtemConfig.DEFAULT_NBT_MAX_DEPTH,
-                        false,
+                        true,
                         WtemConfig.Skipped.DEFAULT,
                         WtemConfig.DEFAULT_SKIPPED_PATHS,
                         Map.of(),
                         WtemConfig.DEFAULT_LANGUAGE_FILE),
                 () ->
                         assertEquals(
-                                Map.of("item.shulker_box.1.container.shulker_box.1.name", "Loot"),
+                                Map.of("container.shulker_box.1.name", "Loot"),
                                 visit(
                                         """
                                         {"id":"minecraft:shulker_box","components":{

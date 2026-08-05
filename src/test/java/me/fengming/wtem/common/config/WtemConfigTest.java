@@ -29,7 +29,8 @@ class WtemConfigTest {
         assertTrue(config.keyReuse().allows("item.stick.1.name"));
         assertEquals(WtemConfig.KeyNaming.DEFAULT, config.keyNaming());
         assertEquals(WtemConfig.DEFAULT_NBT_MAX_DEPTH, config.nbtMaxDepth());
-        assertTrue(config.rebuildNestedKeys());
+        assertFalse(config.rebuildNestedKeys());
+        assertTrue(config.resourcePack().enabled());
         assertEquals(WtemConfig.Skipped.DEFAULT, config.skipped());
         assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, config.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, config.languageFile());
@@ -112,7 +113,7 @@ class WtemConfigTest {
     void readsWhetherNestedDataRestartsItsKey() {
         assertFalse(parse("{\"rebuild_nested_keys\": false}").rebuildNestedKeys());
         assertTrue(parse("{\"rebuild_nested_keys\": true}").rebuildNestedKeys());
-        assertTrue(parse("{\"rebuild_nested_keys\": \"false\"}").rebuildNestedKeys());
+        assertFalse(parse("{\"rebuild_nested_keys\": \"false\"}").rebuildNestedKeys());
     }
 
     @Test
@@ -257,6 +258,108 @@ class WtemConfigTest {
     }
 
     @Test
+    void appliesUnifiedSourceFiltersAndExplicitSelections() {
+        WtemConfig config =
+                parse(
+                        """
+                        {
+                          "skipped_paths": ["internal:function/generated"],
+                          "filters": {
+                            "region": ["minecraft:overworld/*", "!*/*/0_0"],
+                            "datapack": ["world/*", "!*/example:loot_table/private/*"],
+                            "storage": ["*.dat/public/*", "!secret.dat/*"],
+                            "entity": ["minecraft:zombie", "minecraft:skeleton"],
+                            "block_entity": ["minecraft:chest"],
+                            "selection": {
+                              "datapacks": ["world"],
+                              "entities": ["minecraft:zombie"],
+                              "block_entities": ["minecraft:chest"],
+                              "storage_files": ["custom.dat"]
+                            }
+                          }
+                        }
+                        """);
+
+        assertTrue(config.filters().matchesRegion("minecraft:overworld/chunk/1_2"));
+        assertFalse(config.filters().matchesRegion("minecraft:overworld/chunk/0_0"));
+        assertTrue(config.matchesDatapackResource("world", "example", "function/a.mcfunction"));
+        assertFalse(config.matchesDatapackResource("other", "example", "function/a.mcfunction"));
+        assertFalse(
+                config.matchesDatapackResource(
+                        "world", "example", "loot_table/private/chest.json"));
+        assertFalse(
+                config.matchesDatapackResource(
+                        "world", "internal", "function/generated/a.mcfunction"));
+        assertTrue(config.filters().matchesEntity("minecraft:zombie"));
+        assertFalse(config.filters().matchesEntity("minecraft:skeleton"));
+        assertTrue(config.filters().matchesBlockEntity("minecraft:chest"));
+        assertFalse(config.filters().matchesStorage("other.dat", "other.dat/public/name"));
+        assertTrue(config.filters().matchesStorage("custom.dat", "custom.dat/public/name"));
+
+        WtemConfig reloaded = WtemConfig.fromJson(config.toJson(RESOURCE_DIRECTORIES));
+        assertEquals(config.filters(), reloaded.filters());
+        assertEquals(config.skippedPaths(), reloaded.skippedPaths());
+    }
+
+    @Test
+    void supportsSelectingNoSourcesWithoutConfusingItWithTheDefaultAllSelection() {
+        WtemConfig.Filters.Selection all = WtemConfig.Filters.Selection.DEFAULT;
+        WtemConfig.Filters.Selection none =
+                new WtemConfig.Filters.Selection(
+                        List.of(WtemConfig.Filters.Selection.NONE),
+                        List.of(WtemConfig.Filters.Selection.NONE),
+                        List.of(WtemConfig.Filters.Selection.NONE),
+                        List.of(WtemConfig.Filters.Selection.NONE));
+
+        assertTrue(all.matchesDatapack("world"));
+        assertTrue(all.matchesEntity("minecraft:zombie"));
+        assertFalse(none.matchesDatapack("world"));
+        assertFalse(none.matchesEntity("minecraft:zombie"));
+        assertFalse(none.matchesBlockEntity("minecraft:chest"));
+        assertFalse(none.matchesStorageFile("custom.dat"));
+    }
+
+    @Test
+    void changesOnlySourceSelectionWhenTheExtractionScreenSavesIt() {
+        WtemConfig original =
+                parse(
+                        """
+                        {
+                          "stages": {"region": false},
+                          "filters": {
+                            "region": ["minecraft:overworld/*"],
+                            "selection": {"entities": ["minecraft:zombie"]}
+                          },
+                          "outputs": {"export_schema": true}
+                        }
+                        """);
+        WtemConfig.Filters.Selection selection =
+                new WtemConfig.Filters.Selection(
+                        List.of("world"),
+                        List.of("minecraft:skeleton"),
+                        List.of("minecraft:chest"),
+                        List.of("level.dat"));
+
+        WtemConfig updated = original.withSelection(selection);
+
+        assertEquals(original.stages(), updated.stages());
+        assertEquals(original.resources(), updated.resources());
+        assertEquals(original.keyReuse(), updated.keyReuse());
+        assertEquals(original.keyNaming(), updated.keyNaming());
+        assertEquals(original.nbtMaxDepth(), updated.nbtMaxDepth());
+        assertEquals(original.rebuildNestedKeys(), updated.rebuildNestedKeys());
+        assertEquals(original.skipped(), updated.skipped());
+        assertEquals(original.skippedPaths(), updated.skippedPaths());
+        assertEquals(original.builtinEntries(), updated.builtinEntries());
+        assertEquals(original.languageFile(), updated.languageFile());
+        assertEquals(original.filters().region(), updated.filters().region());
+        assertEquals(selection, updated.filters().selection());
+        assertEquals(original.outputs(), updated.outputs());
+        assertEquals(original.aiTranslation(), updated.aiTranslation());
+        assertEquals(original.resourcePack(), updated.resourcePack());
+    }
+
+    @Test
     void readsTheKeyNamingSettings() {
         WtemConfig.KeyNaming keyNaming =
                 parse(
@@ -272,6 +375,33 @@ class WtemConfigTest {
 
         assertEquals(WtemConfig.KeyNaming.Scheme.HASHED, keyNaming.scheme());
         assertEquals(4, keyNaming.randomLength());
+    }
+
+    @Test
+    void readsAiKeyNamingAndBothCustomPrompts() {
+        WtemConfig config =
+                parse(
+                        """
+                        {
+                          "key_naming": {"scheme": "ai"},
+                          "ai_translation": {
+                            "translation_prompt": "Translate to {target_language}; JSON only.",
+                            "key_naming_prompt": "Return {\\"key\\":\\"semantic.key\\"}."
+                          }
+                        }
+                        """);
+
+        assertEquals(WtemConfig.KeyNaming.Scheme.AI, config.keyNaming().scheme());
+        assertEquals(
+                "Translate to {target_language}; JSON only.",
+                config.aiTranslation().translationPrompt());
+        assertEquals(
+                "Return {\"key\":\"semantic.key\"}.",
+                config.aiTranslation().keyNamingPrompt());
+
+        WtemConfig reloaded = WtemConfig.fromJson(config.toJson(RESOURCE_DIRECTORIES));
+        assertEquals(config.aiTranslation(), reloaded.aiTranslation());
+        assertEquals(config.keyNaming(), reloaded.keyNaming());
     }
 
     @Test
@@ -337,6 +467,9 @@ class WtemConfigTest {
         // as an absent one.
         String contents = Files.readString(file);
         assertTrue(contents.contains("generated_structures"), contents);
+        assertTrue(contents.contains("translation_prompt"), contents);
+        assertTrue(contents.contains("key_naming_prompt"), contents);
+        assertTrue(contents.contains("storage_files"), contents);
         WtemConfig reloaded = WtemConfig.fromJson(JsonParser.parseString(contents));
         for (WtemConfig.Stage stage : WtemConfig.Stage.values()) {
             assertTrue(reloaded.isEnabled(stage), stage::name);
@@ -344,7 +477,8 @@ class WtemConfigTest {
         assertEquals(WtemConfig.KeyReuse.DEFAULT, reloaded.keyReuse());
         assertEquals(WtemConfig.KeyNaming.DEFAULT, reloaded.keyNaming());
         assertEquals(WtemConfig.DEFAULT_NBT_MAX_DEPTH, reloaded.nbtMaxDepth());
-        assertTrue(reloaded.rebuildNestedKeys());
+        assertFalse(reloaded.rebuildNestedKeys());
+        assertTrue(reloaded.resourcePack().enabled());
         assertEquals(WtemConfig.Skipped.DEFAULT, reloaded.skipped());
         assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, reloaded.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_BUILTIN_ENTRIES, reloaded.builtinEntries());

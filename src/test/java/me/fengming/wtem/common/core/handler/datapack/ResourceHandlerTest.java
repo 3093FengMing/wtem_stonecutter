@@ -11,7 +11,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import me.fengming.wtem.common.core.extraction.ExtractionDiagnostics;
+import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 import me.fengming.wtem.common.util.ResourceIds;
@@ -96,6 +96,26 @@ class ResourceHandlerTest {
         assertTrue(handler.handle(id("example", "intro.json"), source()));
 
         assertEquals(Map.of("datapack.example.intro", "Kept"), TranslationContext.snapshot());
+    }
+
+    @Test
+    void keepsExplicitCatalogOnlyEntriesWhenTheResourceDoesNotChange() {
+        ResourceHandler handler =
+                new RecordingHandler(false) {
+                    @Override
+                    protected boolean innerHandle(Identifier rl, IoSupplier<InputStream> supplier) {
+                        super.innerHandle(rl, supplier);
+                        TranslationContext.addCatalogEntry("Plain string");
+                        return false;
+                    }
+                };
+
+        assertFalse(handler.handle(id("example", "intro.json"), source()));
+
+        assertEquals(
+                Map.of("datapack.example.intro", "Plain string"),
+                TranslationContext.snapshot());
+        assertFalse(TranslationContext.records().getFirst().replaced());
     }
 
     @Test

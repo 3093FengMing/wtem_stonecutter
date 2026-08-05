@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import net.minecraft.SharedConstants;
@@ -145,6 +146,28 @@ class FunctionHandlerTest {
         assertEquals("Storage", TranslationContext.snapshot().get("container.chest.1.name"));
     }
 
+    // The supplied command uses the 26.2 writable-book component codec. The block-entity-level
+    // regression test covers the same NBT path on every supported version.
+    //? if >=26.2 {
+    @Test
+    void catalogsLecternWritableBookPagesFromTheSuppliedSetblockCommand() {
+        String command =
+                """
+                /setblock 2 0 53 minecraft:lectern[facing=west,has_book=true,powered=false]{Book:{components:{"minecraft:writable_book_content":{pages:[{raw:" 붕어빵 기계는 우클릭을 하여 반죽을 구울 수 있다.\\n\\n 왼쪽 흰색 종을 우클릭하여 장사를 시작할 수 있다.\\n붕어빵을 15번 팔면 장사가 종료되며 쉴 수 있다.\\n\\n 흰색 종 옆 책을 우클릭 하여 현재 메뉴를 볼 수 있다.\\n\\n 노란색 종을 우클릭하여 메뉴를 거절할 수 있다."},{raw:"[ 붕어빵 결합 ]\\n\\n 종 옆에 있는 화로를 활용하여 붕어빵을 제조 할 수 있다.\\n\\n 화로 위에 붕어빵 1개를 던지고 알맞는 아이템을 던지면 새로운 붕어빵 반죽이 완성된다.\\n\\nex) 붕어빵 1개+슈크림 1개"}]}},count:1,id:"minecraft:writable_book"},Page:1,components:{}}
+                """
+                        .strip();
+
+        String result = "/" + FunctionHandler.processFunction(command.substring(1));
+
+        assertEquals(command, result, "plain writable pages must not be rewritten as JSON text");
+        assertEquals(2, TranslationContext.snapshot().size());
+        assertTrue(
+                TranslationContext.snapshot().get("writable_book.1.content.page0")
+                        .startsWith(" 붕어빵 기계는"));
+        assertTrue(TranslationContext.records().stream().noneMatch(record -> record.replaced()));
+    }
+    //?}
+
     @Test
     void translatesMacroLineWithoutInterpolations() {
         String command = "$title @a title {\"text\":\"Hello\"}";
@@ -165,6 +188,67 @@ class FunctionHandlerTest {
 
         assertEquals(command, result);
         assertTrue(TranslationContext.snapshot().isEmpty(), TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void turnsAnExactMacroTextIntoATranslateKeyAndWarns() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String command = "$title @a title {\"text\":\"$(marco)\"}";
+        String result = FunctionHandler.processFunction(command);
+
+        assertEquals("$title @a title {\"translate\":\"$(marco)\"}", result);
+        assertTrue(
+                diagnostics.failures().stream()
+                        .anyMatch(f -> "function_macro_component".equals(f.scope())),
+                diagnostics.failures()::toString);
+    }
+
+    @Test
+    void usesAValidMaskForDynamicColoursAndStillExtractsLiteralSiblings() {
+        String command = "$title @a title {\"text\":\"Hello\",\"color\":\"$(event_color)\"}";
+
+        String result = FunctionHandler.processFunction(command);
+
+        assertTrue(result.contains("\"translate\":\"datapack.test.function\""), result);
+        assertTrue(result.contains("\"color\":\"$(event_color)\""), result);
+        assertEquals("Hello", TranslationContext.snapshot().get("datapack.test.function"));
+    }
+
+    @Test
+    void warnsWhenASelectorUsesANameOption() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String command = "execute as @e[name=???] run say hello";
+        assertEquals(command, FunctionHandler.processFunction(command));
+        assertTrue(
+                diagnostics.failures().stream()
+                        .anyMatch(f -> "function_selector_name".equals(f.scope())),
+                diagnostics.failures()::toString);
+    }
+
+    @Test
+    void extractsLiteralSiblingsFromACompositeMacroDialog() {
+        String command =
+                "$dialog show @s {\"type\":\"minecraft:multi_action\","
+                        + "\"title\":{\"text\":\"영업 활동\",\"color\":\"yellow\"},"
+                        + "\"body\":[{\"type\":\"minecraft:plain_message\","
+                        + "\"contents\":{\"text\":\"👤 현재 손님 요청 없음\",\"color\":\"gray\"}},"
+                        + "{\"type\":\"minecraft:plain_message\","
+                        + "\"contents\":{\"text\":\"$(reqwait)초\",\"color\":\"$(event_color)\"}}]}";
+
+        String result = FunctionHandler.processFunction(command);
+
+        assertTrue(result.contains("translate"), result);
+        assertTrue(result.contains("$(reqwait)초"), result);
+        assertTrue(result.contains("$(event_color)"), result);
+        assertEquals(2, TranslationContext.snapshot().size());
+        assertTrue(TranslationContext.snapshot().containsValue("영업 활동"));
+        assertTrue(TranslationContext.snapshot().containsValue("👤 현재 손님 요청 없음"));
     }
 
     @Test

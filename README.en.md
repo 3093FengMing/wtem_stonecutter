@@ -37,6 +37,7 @@ Save data:
 - Scoreboard team, objective and score display names.
 - Custom boss bar names.
 - NBT structures actually present in the world's `generated/<namespace>/structure(s)`.
+- Every compressed `*.dat` SavedData file below the world's `data/` directory, including nested custom files, with conservative field detection and per-file/path filtering.
 
 Data packs:
 
@@ -46,6 +47,8 @@ Data packs:
 - Text component arguments in functions, entity text in the `nbt` argument of `summon`, and arguments that parse as an item or a block entity, such as `give`'s item components and the block entity NBT of `setblock` and `fill`.
 
 When a replacement in a function file fails, the whole command is left as it was and a warning is logged. Item components in commands like `give` are written back sorted by component ID, so repeated extraction of the same data pack produces the same output.
+
+For vanilla function macros, WTEM first builds a read-only call index for the current data pack. `function ... with storage ...`, `data modify storage ... set value`, and `data merge storage ...` are recognized by Minecraft's Brigadier/NBT parsers. A call site's complete argument set stays correlated, and individually written storage fields are combined at that call site. Every statically resolvable caller binding replaces `$(name)` wherever it occurs, the complete materialized command follows the ordinary extraction path, the macros are restored, and the result is validated again with every parsable caller. When a macro becomes a dynamic `translate` key, every statically known runtime key is added to the catalog as `key = source text` and a warning asks the translator to review it. Values produced by `execute store`, scoreboards, randomness, runtime entity or block NBT, dynamic function IDs/paths, or complex inter-function control flow cannot be evaluated reliably; WTEM keeps those macros and warns instead of guessing.
 
 ## Output
 
@@ -60,7 +63,7 @@ WTEM does not modify the original world data packs. A generated pack holds only 
 
 Identical text reuses the same translation key by default. The reuse policy is configurable, see below.
 
-A warning is logged where text cannot be replaced by a translate component. This includes the author name of books and quills and of written books.
+The `raw` pages of `writable_book_content` are plain strings and cannot carry translate components. WTEM catalogs them for translators and AI export while leaving the save unchanged; these rows have `replaced=false` in the report. Other non-component strings such as written-book authors remain unchanged and produce a warning.
 
 ### Extraction report
 
@@ -76,12 +79,15 @@ Its columns:
 | `location` | Where the data lives: dimension and chunk, data pack and resource ID, or structure file.                                                                                                                                                   |
 | `subject`  | The chain of containing objects, outermost first, joined by ` > `, for example `minecraft:chest (12, 64, -30) > minecraft:shulker_box`. Block entities and entities carry their coordinates; items and nested data follow their container. |
 | `reused`   | Whether this occurrence reused an existing key. `true` means it added no language file entry, and that editing the key affects more than one place.                                                                                        |
+| `replaced` | Whether the original world/data-pack value was replaced with a translate component. `false` identifies catalog-only text such as plain writable-book pages in lecterns.                                                             |
 
 A key that appears in several places has one language file entry but one report row per occurrence, so the report usually has more rows than the language file has entries. If extraction is cancelled or fails partway, the part already written is exported along with the language file.
 
 ## Configuration
 
 The first launch writes a default config to `config/wtem.json`, with every option spelled out at its default value so it can be edited directly. Every option is optional: deleting one or leaving it out keeps the default behavior.
+
+The Select sources button on the extraction screen opens a YACL screen for data packs, SavedData files, and entity/block-entity types. The Configuration button is reserved for the other extraction settings. Saves use atomic replacement, and editing `wtem.json` externally is hot-reloaded automatically. A running extraction keeps its startup snapshot, so changes apply to the next run.
 
 ```json
 {
@@ -91,7 +97,8 @@ The first launch writes a default config to `config/wtem.json`, with every optio
     "scoreboard": true,
     "boss_bar": true,
     "datapacks": true,
-    "generated_structures": true
+    "generated_structures": true,
+    "storage": true
   },
   "resources": {
     "advancement": true,
@@ -118,7 +125,7 @@ The first launch writes a default config to `config/wtem.json`, with every optio
     "random_length": 8
   },
   "nbt_max_depth": 32,
-  "rebuild_nested_keys": true,
+  "rebuild_nested_keys": false,
   "skipped": {
     "command_block_output": true,
     "filtered_text": true
@@ -140,25 +147,71 @@ The first launch writes a default config to `config/wtem.json`, with every optio
     "wtem.8": "8",
     "wtem.9": "9"
   },
-  "language_file": "en_us.json"
+  "language_file": "en_us.json",
+  "filters": {
+    "region": [],
+    "datapack": [],
+    "storage": [],
+    "entity": [],
+    "block_entity": [],
+    "selection": {
+      "datapacks": [],
+      "entities": [],
+      "block_entities": [],
+      "storage_files": []
+    }
+  },
+  "outputs": {
+    "export_region_snbt": false,
+    "export_schema": false,
+    "region_snbt_directory": "wtem/regions",
+    "schema_file": "wtem-schema.json"
+  },
+  "ai_translation": {
+    "enabled": false,
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "api_key": "",
+    "model": "gpt-4o-mini",
+    "target_language": "zh-CN",
+    "output_file": "zh_cn.json",
+    "batch_size": 40,
+    "timeout_seconds": 60,
+    "translation_prompt": "Translate the values of the supplied JSON object into {target_language}. Return only one JSON object with exactly the same keys. Preserve Minecraft formatting codes, placeholders such as %s and %1$s, escape sequences, whitespace, and intentional line breaks. Do not translate JSON keys, commands, identifiers, or formatting tokens.",
+    "key_naming_prompt": "Create one concise semantic Minecraft translation key for the supplied text and suggested_path. Return only a JSON object in the form {\"key\":\"...\"}. Use lowercase ASCII letters, digits, underscores, and dots only. Prefer the source category (item, entity, block, sign, book, or datapack) as the first segment and preserve the semantic role such as .name, .title, or .description as the last segment. Translate the meaning into concise English key words even when the visible text is in another language. Describe the visible text rather than the material id: for example, The Best Sword on a wooden sword should be item.the_best_sword.name. Never include numeric occurrence indexes."
+  },
+  "resource_pack": {
+    "enabled": true,
+    "format": "both",
+    "name": "wtem_translations",
+    "description": "WTEM translations",
+    "output_directory": "resourcepacks",
+    "pack_format": 0
+  }
 }
 ```
 
-- `stages`: switches per extraction stage. `region` is block entities in chunks, `entities` is entity chunks, and the rest are the scoreboard, boss bars, world data packs and world-generated structures.
+- `stages`: switches per extraction stage. `region` is block entities in chunks, `entities` is entity chunks, `storage` recursively reads every `*.dat` below `data/`, and the rest are the scoreboard, boss bars, world data packs and world-generated structures.
 - `resources`: switches per data pack resource type, keyed by registry directory name. The generated file lists every type the current version actually supports; a type that is not listed counts as enabled.
 - `key_reuse`: whether identical text reuses an existing translation key. `default` is the global policy and `overrides` overrides it by key prefix, with the longest matching prefix winning. To translate the same text separately in different places, set the matching prefix to `false`, for example `{"datapack.": false}` gives data pack text its own keys.
 - `key_naming`: how translation keys are named. See below.
 - `nbt_max_depth`: the recursion limit for NBT extraction, which keeps mutually nested items and the like from exhausting the stack. Each nested item, entity or block entity costs one level, and data past the limit is left as it is. A value below 1 is treated as the default.
-- `rebuild_nested_keys`: whether `block_entity_data` on an item names itself from scratch. `true` by default, so, reuse aside, the same wooden sword in different shulker boxes gets the same key wherever it is. With `false` the key looks like `item.shulker_box.1.container.wooden_sword.name`.
+- `rebuild_nested_keys`: whether `block_entity_data` on an item names itself from scratch. It is `false` by default, so, reuse aside, a wooden sword inside a shulker box gets a key such as `item.shulker_box.1.container.wooden_sword.1.name`. With `true`, nested items restart their key and produce a key such as `item.wooden_sword.1.name`.
 - `skipped`: text that can be translated but usually does not need to be. See below.
-- `skipped_paths`: skips resources below selected directories under `data/`; skipped resources are not written to the companion pack. New rules use the resource-location form `<namespace>:<resource path>`: `animated_java:function` matches `data/animated_java/function/**`. `*:function/generated` matches that directory in every namespace, and a resource path of `*` skips a whole namespace.
+- `skipped_paths`: skips resources below selected directories under `data/`; skipped resources are not written to the companion pack. New rules use the resource-location form `<namespace>:<resource path>`: `animated_java:function` matches `data/animated_java/function/**`. `*:function/generated` matches that directory in every namespace, and a resource path of `*` skips a whole namespace. It remains as a compatibility field and is evaluated in the same source-filter pipeline as `filters.datapack`.
 - `builtin_entries`: entries seeded into the language file. Extracted text that matches one of them reuses its key instead of taking a key of its own. The defaults seed the empty string, a space and 0~9: text with no translation value that nonetheless shows up constantly (blank sign lines, numbers on a scoreboard), which after seeding takes one line each. An empty object `{}` seeds nothing; deleting the whole option keeps the defaults.
 - `language_file`: the name of the language file written into the world directory. Only a plain file name is accepted; a name containing a path separator or not ending in `.json` is ignored.
+- `filters`: unified source filters. A normal rule includes a location, `!` excludes it, and `*`/`?` are wildcards; exclusions always win. Region locations are `dimension/chunk/x_z`, data-pack locations are `pack/namespace:path`, SavedData locations are `<path below data>.dat/<NBT path>`, and the entity filters match full namespaced type IDs.
+- `filters.selection`: exact choices saved by the extraction screen. Data packs and SavedData files are discovered from the current world. Entity and block-entity choices come from the current version's registries (avoiding a second full region scan when opening the screen), so a listed type is available but not necessarily present in this world. An empty list means all current and future values. Unchecking every item stores the internal sentinel `["!none"]`, which explicitly means none.
+- `outputs`: enables per-chunk SNBT files under the world-relative `region_snbt_directory` and a machine-readable schema JSON file.
+- `ai_translation`: when enabled, sends catalog entries in batches to an OpenAI-compatible chat-completions endpoint. `translation_prompt` supports the `{target_language}` placeholder; `key_naming_prompt` controls optional AI semantic key naming. With no API key the translation file is an unchanged catalog copy and AI naming falls back to structured keys. Failed requests are warnings and never discard the normal catalog.
+- `resource_pack`: writes a folder, ZIP, or both under the world-relative output directory, enabled by default. The pack contains `pack.mcmeta` and `assets/wtem/lang/` catalogs.
 
 
 ### Skipped text
 
 Both options default to `true`. Set to `true`, the matching text stays out of the language file and the original text in the save is left alone.
+
+These are content policies rather than source selection, so they remain separate from `filters`. `skipped_paths` is a data-pack source rule and is shown with the other filters in the configuration screen.
 
 - `command_block_output`: the cached result of the last execution of a command block or command block minecart (`LastOutput`).
 - `filtered_text`: the chat-filtered copy of sign lines and written book pages (`filtered_messages` / `filtered`).
@@ -169,6 +222,7 @@ Both options default to `true`. Set to `true`, the matching text stays out of th
   - `structured` (default): readable keys derived from the extraction site, for example `entity.zombie.1.name`. Because extraction is unordered, repeated extraction is not guaranteed to be consistent.
   - `hashed`: keys derived from a `hash` of the extraction site, of the form `wtem.<hash>`. Repeated extraction of the same save produces the same keys.
   - `random`: random letters, of the form `wtem.<random>`. The key is unrelated to the extraction site, and repeated extraction is not guaranteed to be consistent.
+  - `ai`: sends the original text and suggested source path to the configured OpenAI-compatible endpoint. For example, a wooden sword named `The Best Sword` may become `item.the_best_sword.name`. Responses must be valid lowercase dotted keys. A missing key, invalid response, or first request failure falls back to structured naming for the rest of the run so the extractor does not repeatedly time out.
 - `random_length`: how many random letters the `random` scheme uses. 8 by default.
 
 ## Development and building

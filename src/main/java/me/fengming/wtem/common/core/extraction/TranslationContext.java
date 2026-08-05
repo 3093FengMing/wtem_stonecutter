@@ -9,7 +9,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.HashSet;
+import java.util.Set;
 import me.fengming.wtem.common.config.WtemConfig;
+import me.fengming.wtem.common.core.extraction.ai.AiKeyNamer;
 import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
 import me.fengming.wtem.common.core.extraction.manifest.ExtractionRecord;
 
@@ -67,10 +70,76 @@ public final class TranslationContext {
      * unless the configured reuse policy or {@code keepDuplicates} opts out.
      */
     public static String addEntry(String value) {
+        return addEntry(value, true);
+    }
+
+    /**
+     * Adds text to the catalog without claiming that its source value was replaced.
+     *
+     * <p>Some Minecraft fields, notably {@code writable_book_content.pages[*].raw}, are plain
+     * strings rather than text components. They are still useful translation input, but putting a
+     * JSON component into those fields would display the JSON literally. Such entries therefore
+     * stay in the catalog and manifest while the world data remains untouched.
+     */
+    public static String addCatalogEntry(String value) {
+        return addEntry(value, false);
+    }
+
+    /**
+     * Adds a catalog-only entry whose key is fixed by data-pack runtime behavior.
+     *
+     * <p>A function macro used as a component translation key is expanded by Minecraft after the
+     * function is called. If a caller supplies {@code Shop}, the generated language file must
+     * therefore contain {@code "Shop": "Shop"}; allocating a normal structured key would create an
+     * entry the command can never address. Existing equal entries are retained and recorded as
+     * reuses. A conflicting existing value is never overwritten.
+     *
+     * @return {@code true} when the requested key maps to the requested value after this call
+     */
+    public static boolean addCatalogEntry(String key, String value) {
+        if (key == null || key.isBlank() || value == null) return false;
+        State state = state();
+        String existing = state.languageEntries.get(key);
+        if (existing != null) {
+            if (!existing.equals(value)) return false;
+            state.records.add(new ExtractionRecord(key, value, state.origin, true, false));
+            return true;
+        }
+
+        state.languageEntries.put(key, value);
+        state.keyCounts.putIfAbsent(key, 1);
+        if (!state.keepDuplicates && state.keyReuse.allows(currentPath())) {
+            state.textToKey.putIfAbsent(value, key);
+        }
+        state.records.add(new ExtractionRecord(key, value, state.origin, false, false));
+        return true;
+    }
+
+    /**
+     * Removes a speculative entry allocated after {@code recordIndex} when macro restoration made
+     * its generated key unreachable. Keys with any earlier occurrence are retained because another
+     * already-written command may still reference them.
+     */
+    public static boolean discardEntryAddedSince(String key, int recordIndex) {
+        if (key == null || key.isBlank() || recordIndex < 0) return false;
+        State state = state();
+        int boundary = Math.min(recordIndex, state.records.size());
+        for (int i = 0; i < boundary; i++) {
+            if (key.equals(state.records.get(i).key())) return false;
+        }
+        if (!state.languageEntries.containsKey(key)) return false;
+
+        state.languageEntries.remove(key);
+        state.textToKey.entrySet().removeIf(entry -> key.equals(entry.getValue()));
+        state.records.subList(boundary, state.records.size())
+                .removeIf(record -> key.equals(record.key()));
+        return true;
+    }
+
+    private static String addEntry(String value, boolean replaced) {
         State state = state();
 
-        var builtinEntries = WtemConfig.active().builtinEntries();
-        if (builtinEntries.containsValue(value)) {
+        if (state.builtinValues.contains(value)) {
             // Can guarantee that it is definitely from the built-in entries
             return state.textToKey.get(value);
         }
@@ -83,18 +152,25 @@ public final class TranslationContext {
                 // The text is already named, but this is a second place it appears, and that is
                 // exactly what a translator needs to know before rewording it. Record the sighting
                 // and mark it as a reuse so the row is not mistaken for a second entry.
-                state.records.add(new ExtractionRecord(existing, value, state.origin, true));
+                state.records.add(
+                        new ExtractionRecord(existing, value, state.origin, true, replaced));
                 return existing;
             }
         }
 
-        String key =
-                state.keyNaming.scheme() == WtemConfig.KeyNaming.Scheme.RANDOM
-                        ? randomKey(state)
-                        : allocateKey(state, state.keyNaming.baseKey(path));
+        String key;
+        if (state.keyNaming.scheme() == WtemConfig.KeyNaming.Scheme.RANDOM) {
+            key = randomKey(state);
+        } else if (state.keyNaming.scheme() == WtemConfig.KeyNaming.Scheme.AI) {
+            String suggested =
+                    state.aiKeyNamer == null ? null : state.aiKeyNamer.suggest(path, value);
+            key = allocateKey(state, suggested == null ? path : suggested);
+        } else {
+            key = allocateKey(state, state.keyNaming.baseKey(path));
+        }
         state.languageEntries.put(key, value);
         if (reuse) state.textToKey.put(value, key);
-        state.records.add(new ExtractionRecord(key, value, state.origin, false));
+        state.records.add(new ExtractionRecord(key, value, state.origin, false, replaced));
         return key;
     }
 
@@ -137,8 +213,48 @@ public final class TranslationContext {
         return List.copyOf(state().records);
     }
 
+    /** Number of source occurrences retained by the current extraction transaction. */
+    public static int recordCount() {
+        return state().records.size();
+    }
+
+    /**
+     * Reports whether every occurrence added after {@code recordIndex} is intentionally
+     * catalog-only.
+     *
+     * <p>This is stricter than merely checking that a record was added: an ordinary handler that
+     * speculatively allocated a replacement and later returned unchanged must still roll back.
+     */
+    public static boolean hasOnlyCatalogEntriesSince(int recordIndex) {
+        List<ExtractionRecord> records = state().records;
+        if (recordIndex < 0 || recordIndex >= records.size()) return false;
+        for (int i = recordIndex; i < records.size(); i++) {
+            if (records.get(i).replaced()) return false;
+        }
+        return true;
+    }
+
     public static void setKeyNaming(WtemConfig.KeyNaming keyNaming) {
         state().keyNaming = keyNaming;
+    }
+
+    /** Installs the run-scoped semantic key provider used by the {@code ai} naming scheme. */
+    public static void setAiKeyNamer(AiKeyNamer aiKeyNamer) {
+        state().aiKeyNamer = aiKeyNamer;
+    }
+
+    /** Captures the immutable configuration snapshot used by the current extraction thread. */
+    public static void setConfig(WtemConfig config) {
+        state().config = config == null ? WtemConfig.active() : config;
+    }
+
+    public static WtemConfig config() {
+        WtemConfig configured = state().config;
+        // Unit tests and callers that use the context directly do not establish an extraction
+        // snapshot. In that case the context must observe the active (possibly temporarily
+        // overridden) configuration. WorldExtractor calls setConfig before starting a run, so a
+        // real extraction still keeps the immutable snapshot for its entire lifetime.
+        return configured == null ? WtemConfig.active() : configured;
     }
 
     /**
@@ -154,11 +270,13 @@ public final class TranslationContext {
      */
     public static void setBuiltinEntries(Map<String, String> entries) {
         State state = state();
+        state.builtinValues.clear();
         entries.forEach(
                 (key, value) -> {
                     state.languageEntries.put(key, value);
                     state.keyCounts.putIfAbsent(key, 1);
                     state.textToKey.putIfAbsent(value, key);
+                    state.builtinValues.add(value);
                 });
         state.builtinEntryCount = state.languageEntries.size();
     }
@@ -274,6 +392,7 @@ public final class TranslationContext {
         private final Map<String, String> languageEntries = new LinkedHashMap<>();
         private final Map<String, String> textToKey = new LinkedHashMap<>();
         private final Map<String, Integer> typeCounts = new LinkedHashMap<>();
+        private final Set<String> builtinValues = new HashSet<>();
         private final Deque<String> pathStack = new ArrayDeque<>();
         private final List<ExtractionRecord> records = new ArrayList<>();
         private ExtractionOrigin origin = ExtractionOrigin.UNKNOWN;
@@ -284,6 +403,13 @@ public final class TranslationContext {
         private boolean keepDuplicates;
         private WtemConfig.KeyReuse keyReuse = WtemConfig.KeyReuse.DEFAULT;
         private WtemConfig.KeyNaming keyNaming = WtemConfig.KeyNaming.DEFAULT;
+        // Shared across transactional copies so caching and the failure circuit breaker apply to
+        // the complete extraction run, including entries whose enclosing write is rolled back.
+        private AiKeyNamer aiKeyNamer;
+        // Null means that no extraction snapshot has been pinned yet. Keeping this unset is
+        // important for direct handler/visitor tests, which install a temporary active config
+        // after clearing the context.
+        private WtemConfig config;
         // Shared across copies so a rolled-back transaction does not replay the same draws and
         // reissue keys that a later entry already took.
         private Random random = new Random();
@@ -294,6 +420,7 @@ public final class TranslationContext {
             copy.languageEntries.putAll(this.languageEntries);
             copy.textToKey.putAll(this.textToKey);
             copy.typeCounts.putAll(this.typeCounts);
+            copy.builtinValues.addAll(this.builtinValues);
             copy.pathStack.addAll(this.pathStack);
             copy.records.addAll(this.records);
             copy.origin = this.origin;
@@ -302,6 +429,8 @@ public final class TranslationContext {
             copy.keepDuplicates = this.keepDuplicates;
             copy.keyReuse = this.keyReuse;
             copy.keyNaming = this.keyNaming;
+            copy.aiKeyNamer = this.aiKeyNamer;
+            copy.config = this.config;
             copy.random = this.random;
             return copy;
         }

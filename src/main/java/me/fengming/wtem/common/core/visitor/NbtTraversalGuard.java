@@ -1,6 +1,6 @@
 package me.fengming.wtem.common.core.visitor;
 
-import me.fengming.wtem.common.config.WtemConfig;
+import me.fengming.wtem.common.core.extraction.TranslationContext;
 
 /** Limits recursive traversal across nested item, entity, and block-entity data. */
 final class NbtTraversalGuard {
@@ -10,7 +10,7 @@ final class NbtTraversalGuard {
 
     static Scope enter() {
         int currentDepth = DEPTH.get();
-        if (currentDepth >= WtemConfig.active().nbtMaxDepth()) {
+        if (currentDepth >= TranslationContext.config().nbtMaxDepth()) {
             return new Scope(currentDepth, false);
         }
 
