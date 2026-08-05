@@ -182,7 +182,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
   },
   "resource_pack": {
     "enabled": true,
-    "format": "both",
+    "format": "zip",
     "name": "wtem_translations",
     "description": "WTEM translations",
     "output_directory": "resourcepacks",
@@ -206,7 +206,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 - `filters.selection`：提取界面的精确选择结果。数据包和 SavedData 文件来自当前世界；实体/方块实体选项来自当前游戏版本注册表（为了打开界面时不再完整扫描所有 region，并不表示每种类型都已在世界中出现）。空列表表示全部，包括以后新增的值；在界面中全部取消会保存为内部哨兵 `["!none"]`，表示明确不选任何项。
 - `outputs`：可开启按区块导出 SNBT，以及在世界根目录写入机器可读的 schema JSON。
 - `ai_translation`：启用后会分批向 OpenAI 兼容 chat-completions 接口发送条目；`translation_prompt` 支持 `{target_language}` 占位符，`key_naming_prompt` 用于可选的 AI 语义键命名。未填写 API 密钥时翻译目标文件会回退为普通语言文件的原样副本；AI 键名会回退为结构化键。请求失败只产生警告，不会丢弃普通语言文件。
-- `resource_pack`：在世界相对目录中导出文件夹、ZIP 或两者，内容包括 `pack.mcmeta` 和 `assets/wtem/lang/` 下的语言文件，默认开启。
+- `resource_pack`：在世界相对目录中导出文件夹、ZIP 或两者，内容包括 `pack.mcmeta` 和 `assets/wtem/lang/` 下的语言文件。默认开启并导出 ZIP；可将 `format` 改为 `folder` 或 `both`。
 
 ### 跳过的文本
 

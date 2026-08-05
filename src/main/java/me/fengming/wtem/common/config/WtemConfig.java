@@ -1035,14 +1035,14 @@ public record WtemConfig(
         public static final ResourcePack DEFAULT =
                 new ResourcePack(
                         true,
-                        Format.BOTH,
+                        Format.ZIP,
                         DEFAULT_NAME,
                         DEFAULT_DESCRIPTION,
                         DEFAULT_OUTPUT_DIRECTORY,
                         0);
 
         public ResourcePack {
-            format = format == null ? Format.BOTH : format;
+            format = format == null ? Format.ZIP : format;
             name = safeFileStem(name, DEFAULT_NAME);
             description = safeText(description, DEFAULT_DESCRIPTION);
             outputDirectory = safeRelativeDirectory(outputDirectory, DEFAULT_OUTPUT_DIRECTORY);

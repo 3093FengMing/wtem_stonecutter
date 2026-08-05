@@ -181,7 +181,7 @@ The Select sources button on the extraction screen opens a YACL screen for data 
   },
   "resource_pack": {
     "enabled": true,
-    "format": "both",
+    "format": "zip",
     "name": "wtem_translations",
     "description": "WTEM translations",
     "output_directory": "resourcepacks",
@@ -204,7 +204,7 @@ The Select sources button on the extraction screen opens a YACL screen for data 
 - `filters.selection`: exact choices saved by the extraction screen. Data packs and SavedData files are discovered from the current world. Entity and block-entity choices come from the current version's registries (avoiding a second full region scan when opening the screen), so a listed type is available but not necessarily present in this world. An empty list means all current and future values. Unchecking every item stores the internal sentinel `["!none"]`, which explicitly means none.
 - `outputs`: enables per-chunk SNBT files under the world-relative `region_snbt_directory` and a machine-readable schema JSON file.
 - `ai_translation`: when enabled, sends catalog entries in batches to an OpenAI-compatible chat-completions endpoint. `translation_prompt` supports the `{target_language}` placeholder; `key_naming_prompt` controls optional AI semantic key naming. With no API key the translation file is an unchanged catalog copy and AI naming falls back to structured keys. Failed requests are warnings and never discard the normal catalog.
-- `resource_pack`: writes a folder, ZIP, or both under the world-relative output directory, enabled by default. The pack contains `pack.mcmeta` and `assets/wtem/lang/` catalogs.
+- `resource_pack`: writes a folder, ZIP, or both under the world-relative output directory. It is enabled by default and writes a ZIP; set `format` to `folder` or `both` to change the output. The pack contains `pack.mcmeta` and `assets/wtem/lang/` catalogs.
 
 
 ### Skipped text

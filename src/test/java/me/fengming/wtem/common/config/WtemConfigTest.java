@@ -31,6 +31,7 @@ class WtemConfigTest {
         assertEquals(WtemConfig.DEFAULT_NBT_MAX_DEPTH, config.nbtMaxDepth());
         assertFalse(config.rebuildNestedKeys());
         assertTrue(config.resourcePack().enabled());
+        assertEquals(WtemConfig.ResourcePack.Format.ZIP, config.resourcePack().format());
         assertEquals(WtemConfig.Skipped.DEFAULT, config.skipped());
         assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, config.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, config.languageFile());
@@ -479,6 +480,7 @@ class WtemConfigTest {
         assertEquals(WtemConfig.DEFAULT_NBT_MAX_DEPTH, reloaded.nbtMaxDepth());
         assertFalse(reloaded.rebuildNestedKeys());
         assertTrue(reloaded.resourcePack().enabled());
+        assertEquals(WtemConfig.ResourcePack.Format.ZIP, reloaded.resourcePack().format());
         assertEquals(WtemConfig.Skipped.DEFAULT, reloaded.skipped());
         assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, reloaded.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_BUILTIN_ENTRIES, reloaded.builtinEntries());
