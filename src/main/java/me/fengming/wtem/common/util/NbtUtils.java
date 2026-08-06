@@ -137,9 +137,15 @@ public final class NbtUtils {
         if (path.isEmpty()) return compound;
 
         CompoundTag current = compound;
-        for (String name : path.split("\\.")) {
+        int segmentStart = 0;
+        while (segmentStart < path.length()) {
+            int separator = path.indexOf('.', segmentStart);
+            int segmentEnd = separator < 0 ? path.length() : separator;
+            String name = path.substring(segmentStart, segmentEnd);
             current = findCompound(current, name);
             if (current == null) return null;
+            if (separator < 0) break;
+            segmentStart = separator + 1;
         }
         return current;
     }

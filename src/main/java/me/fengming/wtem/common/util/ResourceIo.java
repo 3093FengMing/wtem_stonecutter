@@ -33,11 +33,17 @@ public final class ResourceIo {
             if (path == null || path.isEmpty()) return root;
 
             JsonElement current = root;
-            for (String name : path.split("\\.")) {
+            int segmentStart = 0;
+            while (segmentStart < path.length()) {
+                int separator = path.indexOf('.', segmentStart);
+                int segmentEnd = separator < 0 ? path.length() : separator;
+                String name = path.substring(segmentStart, segmentEnd);
                 if (!current.isJsonObject() || !current.getAsJsonObject().has(name)) {
                     throw new ResourceIoException("Missing JSON path: " + path);
                 }
                 current = current.getAsJsonObject().get(name);
+                if (separator < 0) break;
+                segmentStart = separator + 1;
             }
             return current;
         } catch (IOException | RuntimeException exception) {

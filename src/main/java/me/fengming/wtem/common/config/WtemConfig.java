@@ -11,6 +11,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -46,6 +47,8 @@ import me.fengming.wtem.common.util.ResourceIo;
  * @param outputs optional diagnostic and generated-output files produced by extraction
  * @param aiTranslation settings for the optional OpenAI-compatible translation exporter
  * @param resourcePack settings for the optional client resource-pack exporter
+ * @param savedDataTextFields field names that identify likely text components in SavedData
+ *
  * @author FengMing
  */
 public record WtemConfig(
@@ -62,14 +65,20 @@ public record WtemConfig(
         Filters filters,
         Outputs outputs,
         AiTranslation aiTranslation,
-        ResourcePack resourcePack) {
+        ResourcePack resourcePack,
+        List<String> savedDataTextFields) {
 
     public static final String FILE_NAME = "wtem.json";
     public static final String DEFAULT_LANGUAGE_FILE = "en_us.json";
     public static final int DEFAULT_NBT_MAX_DEPTH = 32;
+    public static final List<String> DEFAULT_SAVED_DATA_TEXT_FIELDS =
+            List.of("name", "custom_name", "customname",
+                "title", "subtitle", "description", "text",
+                "message", "label", "display_name", "displayname",
+                "lore", "messages", "pages", "lines", "raw",
+                "front_text", "back_text", "prompt",
+                "tooltip", "error_message");
     private static final String DEFAULT_SKIPPED_PATH = "animated_java:function";
-    private static final String EARLY_DEFAULT_SKIPPED_PATH = "function/animated_java";
-    private static final String SLASH_DEFAULT_SKIPPED_PATH = "animated_java/function";
 
     /** Keeps source compatibility for callers that only know the original ten settings. */
     public WtemConfig(
@@ -97,7 +106,42 @@ public record WtemConfig(
                 Filters.DEFAULT,
                 Outputs.DEFAULT,
                 AiTranslation.DEFAULT,
-                ResourcePack.DEFAULT);
+                ResourcePack.DEFAULT,
+                DEFAULT_SAVED_DATA_TEXT_FIELDS);
+    }
+
+    /** Keeps source compatibility for callers using the full pre-SavedData-field constructor. */
+    public WtemConfig(
+            Map<Stage, Boolean> stages,
+            Map<String, Boolean> resources,
+            KeyReuse keyReuse,
+            KeyNaming keyNaming,
+            int nbtMaxDepth,
+            boolean rebuildNestedKeys,
+            Skipped skipped,
+            List<String> skippedPaths,
+            Map<String, String> builtinEntries,
+            String languageFile,
+            Filters filters,
+            Outputs outputs,
+            AiTranslation aiTranslation,
+            ResourcePack resourcePack) {
+        this(
+                stages,
+                resources,
+                keyReuse,
+                keyNaming,
+                nbtMaxDepth,
+                rebuildNestedKeys,
+                skipped,
+                skippedPaths,
+                builtinEntries,
+                languageFile,
+                filters,
+                outputs,
+                aiTranslation,
+                resourcePack,
+                DEFAULT_SAVED_DATA_TEXT_FIELDS);
     }
 
     /**
@@ -125,7 +169,8 @@ public record WtemConfig(
                     Filters.DEFAULT,
                     Outputs.DEFAULT,
                     AiTranslation.DEFAULT,
-                    ResourcePack.DEFAULT);
+                    ResourcePack.DEFAULT,
+                    DEFAULT_SAVED_DATA_TEXT_FIELDS);
 
     private static volatile WtemConfig active = DEFAULT;
 
@@ -153,6 +198,7 @@ public record WtemConfig(
         outputs = outputs == null ? Outputs.DEFAULT : outputs;
         aiTranslation = aiTranslation == null ? AiTranslation.DEFAULT : aiTranslation;
         resourcePack = resourcePack == null ? ResourcePack.DEFAULT : resourcePack;
+        savedDataTextFields = normalizeSavedDataTextFields(savedDataTextFields);
         // A non-positive limit would stop traversal before the outermost tag is read, which silently
         // extracts nothing at all. Treat it the same way as a malformed value.
         if (nbtMaxDepth < 1) nbtMaxDepth = DEFAULT_NBT_MAX_DEPTH;
@@ -166,6 +212,16 @@ public record WtemConfig(
             entries.put(KeyNaming.GENERATED_PREFIX + digit, String.valueOf(digit));
         }
         return Collections.unmodifiableMap(entries);
+    }
+
+    private static List<String> normalizeSavedDataTextFields(List<String> values) {
+        if (values == null) values = DEFAULT_SAVED_DATA_TEXT_FIELDS;
+        return values.stream()
+                .filter(Objects::nonNull)
+                .map(value -> value.trim().toLowerCase(Locale.ROOT))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
     }
 
     /** The extraction stages that can be switched off independently. */
@@ -256,7 +312,8 @@ public record WtemConfig(
                 Filters.fromJson(object(json, "filters")),
                 Outputs.fromJson(object(json, "outputs")),
                 AiTranslation.fromJson(object(json, "ai_translation")),
-                ResourcePack.fromJson(object(json, "resource_pack")));
+                ResourcePack.fromJson(object(json, "resource_pack")),
+                savedDataTextFields(json));
     }
 
     /**
@@ -294,6 +351,7 @@ public record WtemConfig(
         json.add("skipped_paths", skippedPathJson);
         json.add("builtin_entries", builtinJson);
         json.addProperty("language_file", this.languageFile);
+        addStrings(json, "saved_data_text_fields", this.savedDataTextFields);
         json.add("filters", this.filters.toJson());
         json.add("outputs", this.outputs.toJson());
         json.add("ai_translation", this.aiTranslation.toJson());
@@ -337,7 +395,8 @@ public record WtemConfig(
                         selection),
                 this.outputs,
                 this.aiTranslation,
-                this.resourcePack);
+                this.resourcePack,
+                this.savedDataTextFields);
     }
 
     /**
@@ -376,14 +435,6 @@ public record WtemConfig(
 
             // Older configs had no namespace and matched the resource path in every namespace.
             if (isSameOrChild(path, skipped)) return true;
-
-            // Both of these values have been written as the Animated Java default. Preserve their
-            // old path-only meaning above, but also make them address the directory they intended.
-            if (isAnimatedJavaDefaultAlias(skipped)
-                    && "animated_java".equals(namespace)
-                    && isSameOrChild(path, "function")) {
-                return true;
-            }
         }
         return false;
     }
@@ -408,11 +459,6 @@ public record WtemConfig(
         if (normalized.startsWith(prefix)) return normalized.substring(prefix.length());
         if (normalized.startsWith(namespace + "/")) return normalized.substring(namespace.length() + 1);
         return normalized.startsWith("data/") ? normalized.substring("data/".length()) : normalized;
-    }
-
-    private static boolean isAnimatedJavaDefaultAlias(String path) {
-        return path.equals(EARLY_DEFAULT_SKIPPED_PATH)
-                || path.equals(SLASH_DEFAULT_SKIPPED_PATH);
     }
 
     private static boolean isSameOrChild(String candidate, String directory) {
@@ -456,9 +502,10 @@ public record WtemConfig(
         String namespace = path.substring(0, separator);
         String resourcePath = path.substring(separator + 1);
         while (resourcePath.startsWith("/")) resourcePath = resourcePath.substring(1);
-        if ((!"*".equals(namespace) && !namespace.matches("[a-z0-9_.-]+"))
+        if ((!"*".equals(namespace)
+                        && !containsOnly(namespace, "abcdefghijklmnopqrstuvwxyz0123456789_.-"))
                 || (!"*".equals(resourcePath)
-                        && !resourcePath.matches("[a-z0-9/._-]+"))) {
+                        && !containsOnly(resourcePath, "abcdefghijklmnopqrstuvwxyz0123456789/._-"))) {
             return invalidSkippedPath(value);
         }
         return namespace + ":" + resourcePath;
@@ -494,6 +541,17 @@ public record WtemConfig(
         return entries;
     }
 
+    /** Reads the SavedData field-name heuristic; an absent setting keeps the built-in list. */
+    private static List<String> savedDataTextFields(JsonObject json) {
+        JsonElement value = json.get("saved_data_text_fields");
+        if (value == null) return DEFAULT_SAVED_DATA_TEXT_FIELDS;
+        if (!value.isJsonArray()) {
+            Wtem.LOGGER.warn("Ignoring saved_data_text_fields: expected an array");
+            return DEFAULT_SAVED_DATA_TEXT_FIELDS;
+        }
+        return readStrings(json, "saved_data_text_fields");
+    }
+
     private static <V> Map<String, V> ordered(Map<String, V> values) {
         return Collections.unmodifiableMap(new LinkedHashMap<>(values));
     }
@@ -505,7 +563,7 @@ public record WtemConfig(
         String name = value.getAsString();
         // The catalog is written into the world directory, so the name must stay a plain file name:
         // a path fragment here would let the configuration write anywhere on disk.
-        if (!name.matches("[A-Za-z0-9._-]+\\.json") || name.startsWith(".")) {
+        if (!isJsonFileName(name)) {
             Wtem.LOGGER.warn(
                     "Ignoring language_file {}: expected a plain .json file name", name);
             return DEFAULT_LANGUAGE_FILE;
@@ -577,7 +635,7 @@ public record WtemConfig(
 
     private static String safeFileName(String value, String fallback) {
         String candidate = value == null ? "" : value.trim();
-        return candidate.matches("[A-Za-z0-9._-]+")
+        return containsOnly(candidate, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
                         && !candidate.startsWith(".")
                         && !"..".equals(candidate)
                 ? candidate
@@ -586,8 +644,7 @@ public record WtemConfig(
 
     private static String safeJsonFileName(String value, String fallback) {
         String candidate = value == null ? "" : value.trim();
-        return candidate.matches("[A-Za-z0-9._-]+\\.json")
-                        && !candidate.startsWith(".")
+        return isJsonFileName(candidate)
                 ? candidate
                 : fallback;
     }
@@ -599,13 +656,40 @@ public record WtemConfig(
     private static String safeRelativeDirectory(String value, String fallback) {
         String candidate = value == null ? "" : value.trim().replace('\\', '/');
         while (candidate.endsWith("/")) candidate = candidate.substring(0, candidate.length() - 1);
-        if (candidate.isBlank() || candidate.startsWith("/") || candidate.matches("[A-Za-z]:.*")) {
+        if (candidate.isBlank() || candidate.startsWith("/") || isWindowsDrivePath(candidate)) {
             return fallback;
         }
-        for (String segment : candidate.split("/")) {
+        int segmentStart = 0;
+        for (int index = 0; index <= candidate.length(); index++) {
+            if (index != candidate.length() && candidate.charAt(index) != '/') continue;
+            String segment = candidate.substring(segmentStart, index);
             if (segment.isBlank() || ".".equals(segment) || "..".equals(segment)) return fallback;
+            segmentStart = index + 1;
         }
         return candidate;
+    }
+
+    private static boolean isJsonFileName(String value) {
+        return value != null
+                && !value.isBlank()
+                && !value.startsWith(".")
+                && value.endsWith(".json")
+                && containsOnly(value, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-");
+    }
+
+    private static boolean isWindowsDrivePath(String value) {
+        return value.length() >= 2
+                && ((value.charAt(0) >= 'A' && value.charAt(0) <= 'Z')
+                        || (value.charAt(0) >= 'a' && value.charAt(0) <= 'z'))
+                && value.charAt(1) == ':';
+    }
+
+    private static boolean containsOnly(String value, String allowedCharacters) {
+        if (value == null || value.isEmpty()) return false;
+        for (int index = 0; index < value.length(); index++) {
+            if (allowedCharacters.indexOf(value.charAt(index)) < 0) return false;
+        }
+        return true;
     }
 
     private static String safeHttpEndpoint(String value, String fallback) {
@@ -786,19 +870,30 @@ public record WtemConfig(
         }
 
         private static boolean globMatches(String glob, String value) {
-            StringBuilder regex = new StringBuilder("^");
-            for (int i = 0; i < glob.length(); i++) {
-                char character = glob.charAt(i);
-                switch (character) {
-                    case '*' -> regex.append(".*");
-                    case '?' -> regex.append('.');
-                    default -> {
-                        if ("\\.^$|()[]{}+".indexOf(character) >= 0) regex.append('\\');
-                        regex.append(character);
-                    }
+            // Keep configuration glob semantics without translating user input into a regular
+            // expression: '*' matches any sequence and '?' matches one code unit.
+            int globIndex = 0;
+            int valueIndex = 0;
+            int lastStar = -1;
+            int valueAfterStar = -1;
+            while (valueIndex < value.length()) {
+                if (globIndex < glob.length()
+                        && (glob.charAt(globIndex) == '?'
+                                || glob.charAt(globIndex) == value.charAt(valueIndex))) {
+                    globIndex++;
+                    valueIndex++;
+                } else if (globIndex < glob.length() && glob.charAt(globIndex) == '*') {
+                    lastStar = globIndex++;
+                    valueAfterStar = valueIndex;
+                } else if (lastStar >= 0) {
+                    globIndex = lastStar + 1;
+                    valueIndex = ++valueAfterStar;
+                } else {
+                    return false;
                 }
             }
-            return value.matches(regex.append('$').toString());
+            while (globIndex < glob.length() && glob.charAt(globIndex) == '*') globIndex++;
+            return globIndex == glob.length();
         }
 
         public record Selection(
@@ -905,7 +1000,11 @@ public record WtemConfig(
         }
     }
 
-    /** Settings for an OpenAI-compatible chat-completion translation endpoint. */
+    /** Settings for an OpenAI-compatible translation endpoint.
+     *
+     * <p>{@code batchSize} is retained for backwards-compatible config/constructor loading but is
+     * no longer used: a translation run always sends the complete catalog in one request.
+     */
     public record AiTranslation(
             boolean enabled,
             String endpoint,
@@ -916,10 +1015,14 @@ public record WtemConfig(
             int batchSize,
             int timeoutSeconds,
             String translationPrompt,
-            String keyNamingPrompt) {
+            String keyNamingPrompt,
+            Protocol protocol) {
+        public static final int MIN_BATCH_SIZE = 1;
+        public static final int MAX_BATCH_SIZE = 500;
+        public static final int DEFAULT_BATCH_SIZE = 200;
         private static final String DEFAULT_ENDPOINT =
-                "https://api.openai.com/v1/chat/completions";
-        private static final String DEFAULT_MODEL = "gpt-4o-mini";
+                "https://api.deepseek.com";
+        private static final String DEFAULT_MODEL = "deepseek-v4-flash";
         private static final String DEFAULT_TARGET_LANGUAGE = "zh-CN";
         private static final String DEFAULT_OUTPUT_FILE = "zh_cn.json";
         public static final String DEFAULT_TRANSLATION_PROMPT =
@@ -947,10 +1050,11 @@ public record WtemConfig(
                         DEFAULT_MODEL,
                         DEFAULT_TARGET_LANGUAGE,
                         DEFAULT_OUTPUT_FILE,
-                        40,
+                         DEFAULT_BATCH_SIZE,
                         60,
                         DEFAULT_TRANSLATION_PROMPT,
-                        DEFAULT_KEY_NAMING_PROMPT);
+                        DEFAULT_KEY_NAMING_PROMPT,
+                        Protocol.CHAT_COMPLETIONS);
 
         /** Source compatibility for configurations constructed before prompts were customizable. */
         public AiTranslation(
@@ -972,7 +1076,34 @@ public record WtemConfig(
                     batchSize,
                     timeoutSeconds,
                     DEFAULT_TRANSLATION_PROMPT,
-                    DEFAULT_KEY_NAMING_PROMPT);
+                    DEFAULT_KEY_NAMING_PROMPT,
+                    Protocol.CHAT_COMPLETIONS);
+        }
+
+        /** Source compatibility for configurations constructed with custom prompts. */
+        public AiTranslation(
+                boolean enabled,
+                String endpoint,
+                String apiKey,
+                String model,
+                String targetLanguage,
+                String outputFile,
+                int batchSize,
+                int timeoutSeconds,
+                String translationPrompt,
+                String keyNamingPrompt) {
+            this(
+                    enabled,
+                    endpoint,
+                    apiKey,
+                    model,
+                    targetLanguage,
+                    outputFile,
+                    batchSize,
+                    timeoutSeconds,
+                    translationPrompt,
+                    keyNamingPrompt,
+                    Protocol.CHAT_COMPLETIONS);
         }
 
         public AiTranslation {
@@ -981,10 +1112,11 @@ public record WtemConfig(
             model = safeText(model, DEFAULT_MODEL);
             targetLanguage = safeText(targetLanguage, DEFAULT_TARGET_LANGUAGE);
             outputFile = safeJsonFileName(outputFile, DEFAULT_OUTPUT_FILE);
-            batchSize = Math.clamp(batchSize, 1, 200);
+            batchSize = Math.clamp(batchSize, MIN_BATCH_SIZE, MAX_BATCH_SIZE);
             timeoutSeconds = Math.clamp(timeoutSeconds, 1, 600);
             translationPrompt = safeText(translationPrompt, DEFAULT_TRANSLATION_PROMPT);
             keyNamingPrompt = safeText(keyNamingPrompt, DEFAULT_KEY_NAMING_PROMPT);
+            protocol = protocol == null ? Protocol.CHAT_COMPLETIONS : protocol;
         }
 
         public boolean usable() {
@@ -1002,7 +1134,9 @@ public record WtemConfig(
                     readInt(json, "batch_size").orElse(DEFAULT.batchSize()),
                     readInt(json, "timeout_seconds").orElse(DEFAULT.timeoutSeconds()),
                     readString(json, "translation_prompt").orElse(DEFAULT.translationPrompt()),
-                    readString(json, "key_naming_prompt").orElse(DEFAULT.keyNamingPrompt()));
+                    readString(json, "key_naming_prompt").orElse(DEFAULT.keyNamingPrompt()),
+                    readEnum(json, "protocol", Protocol.values(), Protocol::id)
+                            .orElse(DEFAULT.protocol()));
         }
 
         JsonObject toJson() {
@@ -1013,11 +1147,26 @@ public record WtemConfig(
             json.addProperty("model", this.model);
             json.addProperty("target_language", this.targetLanguage);
             json.addProperty("output_file", this.outputFile);
-            json.addProperty("batch_size", this.batchSize);
             json.addProperty("timeout_seconds", this.timeoutSeconds);
             json.addProperty("translation_prompt", this.translationPrompt);
             json.addProperty("key_naming_prompt", this.keyNamingPrompt);
+            json.addProperty("protocol", this.protocol.id());
             return json;
+        }
+
+        public enum Protocol {
+            CHAT_COMPLETIONS("chat_completions"),
+            RESPONSES("responses");
+
+            private final String id;
+
+            Protocol(String id) {
+                this.id = id;
+            }
+
+            public String id() {
+                return this.id;
+            }
         }
     }
 
@@ -1027,25 +1176,21 @@ public record WtemConfig(
             Format format,
             String name,
             String description,
-            String outputDirectory,
             int packFormat) {
-        private static final String DEFAULT_NAME = "wtem_translations";
+        private static final String DEFAULT_NAME = "resources.zip";
         private static final String DEFAULT_DESCRIPTION = "WTEM translations";
-        private static final String DEFAULT_OUTPUT_DIRECTORY = "resourcepacks";
         public static final ResourcePack DEFAULT =
                 new ResourcePack(
                         true,
                         Format.ZIP,
                         DEFAULT_NAME,
                         DEFAULT_DESCRIPTION,
-                        DEFAULT_OUTPUT_DIRECTORY,
                         0);
 
         public ResourcePack {
             format = format == null ? Format.ZIP : format;
             name = safeFileStem(name, DEFAULT_NAME);
             description = safeText(description, DEFAULT_DESCRIPTION);
-            outputDirectory = safeRelativeDirectory(outputDirectory, DEFAULT_OUTPUT_DIRECTORY);
             packFormat = Math.max(0, packFormat);
         }
 
@@ -1055,7 +1200,6 @@ public record WtemConfig(
                     readEnum(json, "format", Format.values(), Format::id).orElse(DEFAULT.format()),
                     readString(json, "name").orElse(DEFAULT.name()),
                     readString(json, "description").orElse(DEFAULT.description()),
-                    readString(json, "output_directory").orElse(DEFAULT.outputDirectory()),
                     readInt(json, "pack_format").orElse(DEFAULT.packFormat()));
         }
 
@@ -1065,7 +1209,6 @@ public record WtemConfig(
             json.addProperty("format", this.format.id());
             json.addProperty("name", this.name);
             json.addProperty("description", this.description);
-            json.addProperty("output_directory", this.outputDirectory);
             json.addProperty("pack_format", this.packFormat);
             return json;
         }

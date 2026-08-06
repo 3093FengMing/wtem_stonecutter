@@ -124,6 +124,37 @@ class SimpleJsonHandlerTest {
     }
 
     @Test
+    void extractsDialogComponentArraysAndActionEvents() throws IOException {
+        SimpleJsonHandler handler =
+                handler(
+                        "description",
+                        "body[*].contents",
+                        "actions[*].label",
+                        "actions[*].action");
+
+        assertTrue(
+                handler.handle(
+                        id("dialog.json"),
+                        source(
+                                """
+                                {"description":{"type":"minecraft:plain_message","contents":[{"text":"Description"}]},
+                                 "body":[{"contents":[{"text":"First body"},{"text":"Second body"}]}],
+                                 "actions":[{"label":{"text":"Label","hoverEvent":{"action":"show_text","contents":{"text":"Hover"}},"clickEvent":{"action":"run_command","command":"title @s title {\\"text\\":\\"Click command\\"}"}},"action":{"type":"run_command","command":"title @s title {\\"text\\":\\"Action command\\"}"}}]}
+                                """)));
+
+        assertTrue(TranslationContext.snapshot().containsValue("Description"));
+        assertTrue(TranslationContext.snapshot().containsValue("First bodySecond body"));
+        assertTrue(TranslationContext.snapshot().containsValue("Label"));
+        assertTrue(TranslationContext.snapshot().containsValue("Hover"));
+        assertTrue(TranslationContext.snapshot().containsValue("Click command"), TranslationContext.snapshot()::toString);
+        assertTrue(TranslationContext.snapshot().containsValue("Action command"), TranslationContext.snapshot()::toString);
+        JsonObject written = read(id("dialog.json"));
+        String serialized = written.toString();
+        assertTrue(serialized.contains("translate"), serialized);
+        assertFalse(serialized.contains("\"text\":\"Description\""), serialized);
+    }
+
+    @Test
     void leavesTheFileAloneWhenNoTargetMatches() {
         SimpleJsonHandler handler = handler("display.title");
 

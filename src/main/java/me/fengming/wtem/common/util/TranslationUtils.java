@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import com.mojang.serialization.JsonOps;
 import java.util.ArrayList;
 import java.util.List;
@@ -80,11 +81,37 @@ public final class TranslationUtils {
         if (json == null || json.isJsonNull()) return json;
 
         try (var transaction = TranslationContext.beginTransaction()) {
-            deserializeComponent(json);
-            TransformResult result = translateComponentJson(json.deepCopy());
+            TransformResult result;
+            if (containsMacro(json)) {
+                result = translateComponentJson(json.deepCopy());
+            } else {
+                deserializeComponent(json);
+                result = translateComponentJson(json.deepCopy());
+            }
             if (!result.changed()) return json;
 
-            deserializeComponent(result.value());
+            if (!containsMacro(json)) deserializeComponent(result.value());
+            transaction.commit();
+            return result.value();
+        } catch (JsonParseException | IllegalStateException e) {
+            return json;
+        }
+    }
+
+    /**
+     * Translates a schema object that has already been decoded by a Minecraft codec.
+     *
+     * <p>This is used for command arguments such as inline dialogs. The caller must first let
+     * Brigadier decode the argument into its Minecraft value; this method only walks that decoded
+     * value's codec representation and never searches the original command for arbitrary JSON.
+     */
+    public static JsonElement translateDecodedTree(JsonElement json) {
+        if (json == null || json.isJsonNull()) return json;
+
+        try (var transaction = TranslationContext.beginTransaction()) {
+            JsonElement working = json.deepCopy();
+            TransformResult result = translateJsonComponentTree(working);
+            if (!result.changed()) return json;
             transaction.commit();
             return result.value();
         } catch (JsonParseException | IllegalStateException e) {
@@ -249,15 +276,39 @@ public final class TranslationUtils {
             // serialized to JSON in one, while the component format reads a string as the literal
             // text of a component in its own right. Which one it is decides the form the
             // translation has to be written back in, so the answer is carried to the write below.
-            Component component = null;
             boolean serializedJson = false;
+            JsonElement sourceJson = null;
             if (looksLikeSerializedJson(stringValue)) {
                 try {
-                    component = deserializeComponent(JsonParser.parseString(stringValue));
+                    sourceJson = JsonParser.parseString(stringValue);
                     serializedJson = true;
                 } catch (JsonParseException | IllegalStateException ignoredException) {}
             }
-            if (component == null) component = deserializeNbtComponent(originalTag);
+
+            if (sourceJson == null) {
+                JsonObject literal = new JsonObject();
+                literal.addProperty("text", stringValue == null ? "" : stringValue);
+                sourceJson = literal;
+            }
+
+            try {
+                JsonElement translatedJson = translateLiteral(sourceJson);
+                if (translatedJson != sourceJson) {
+                    if (!preferStructured && serializedJson) {
+                        return StringTag.valueOf(translatedJson.toString());
+                    }
+                    if (translatedJson.isJsonObject()) {
+                        return NbtUtils.fromJson(translatedJson.getAsJsonObject());
+                    }
+                }
+            } catch (JsonParseException | IllegalStateException ignoredException) {}
+
+            Component component;
+            try {
+                component = deserializeNbtComponent(originalTag);
+            } catch (JsonParseException | IllegalStateException ignoredException) {
+                return originalTag;
+            }
 
             Component translated = translateLiteral(component);
             if (translated == component) return originalTag;
@@ -273,6 +324,20 @@ public final class TranslationUtils {
             //?} else
             //return StringTag.valueOf(serializeComponent(translated).toString());
         }
+
+        try {
+            JsonElement sourceJson = NbtOps.INSTANCE.convertTo(JsonOps.INSTANCE, originalTag);
+            if (sourceJson.isJsonObject() || sourceJson.isJsonArray()) {
+                JsonElement translatedJson = translateLiteral(sourceJson);
+                if (translatedJson != sourceJson) {
+                    // NBT component fields are not always compounds.  Text-display entities and
+                    // function arguments may carry a component sequence as a ListTag; converting
+                    // the translated JSON back through the same DynamicOps pair preserves that
+                    // list instead of falling through to a codec path that cannot decode it.
+                    return JsonOps.INSTANCE.convertTo(NbtOps.INSTANCE, translatedJson);
+                }
+            }
+        } catch (JsonParseException | IllegalStateException ignoredException) {}
 
         Component component = deserializeNbtComponent(originalTag);
         Component translated = translateLiteral(component);
@@ -312,45 +377,48 @@ public final class TranslationUtils {
 
         if (json.isJsonPrimitive()) {
             if (!json.getAsJsonPrimitive().isString()) return TransformResult.unchanged(json);
-
-            String literal = json.getAsString();
-            if (literal.isBlank()) return TransformResult.unchanged(json);
-            return TransformResult.changed(
-                    serializeComponent(Component.translatable(TranslationContext.addEntry(literal))));
+            return translateTextComponent(json.getAsString(), new JsonObject());
         }
+        if (json.isJsonArray()) return translateComponentArray(json.getAsJsonArray());
+        if (!json.isJsonObject()) return TransformResult.unchanged(json);
+        return translateComponentObject(json.getAsJsonObject());
+    }
 
-        if (json.isJsonArray()) {
-            JsonArray array = json.getAsJsonArray();
-            boolean changed = false;
-            for (int i = 0; i < array.size(); i++) {
-                TransformResult child = translateComponentJson(array.get(i));
-                if (!child.changed()) continue;
-
-                array.set(i, child.value());
-                changed = true;
+    /** Translates one component while retaining every style and event member. */
+    private static TransformResult translateComponentObject(JsonObject source) {
+        if (isLiteralComponent(source)
+                && source.has("extra")
+                && source.get("extra").isJsonArray()) {
+            // Component codec serialization represents an input component sequence as one root
+            // literal plus an `extra` array.  Treat that representation as a single sequence so a
+            // score/selector/NBT child can become a `with` argument between two literal siblings.
+            // Processing the merged result once more walks its hover/click/separator members.
+            List<JsonElement> sequence = new ArrayList<>();
+            JsonObject root = source.deepCopy();
+            root.remove("extra");
+            sequence.add(root);
+            source.getAsJsonArray("extra").forEach(child -> sequence.add(child.deepCopy()));
+            TransformResult merged = translateComponentGroup(sequence);
+            if (merged.value().isJsonObject()) {
+                TransformResult nested = translateComponentObject(merged.value().getAsJsonObject());
+                return new TransformResult(
+                        nested.value(), merged.changed() || nested.changed());
             }
-            return new TransformResult(array, changed);
+            return merged;
         }
 
-        JsonObject component = json.getAsJsonObject();
-        JsonObject result = component;
+        JsonObject result = source;
+        boolean changed = false;
+
+        if (isLiteralComponent(source)) {
+            TransformResult translated =
+                    translateTextComponent(source.get("text").getAsString(), source);
+            result = translated.value().getAsJsonObject();
+            changed = translated.changed();
+        }
+
         ChangeTracker tracker = new ChangeTracker();
-
-        if (isLiteralComponent(component)) {
-            String literal = component.get("text").getAsString();
-            if (!literal.isBlank()) {
-                JsonElement encoded =
-                        serializeComponent(Component.translatable(TranslationContext.addEntry(literal)));
-                if (!encoded.isJsonObject()) {
-                    throw new JsonParseException("A translatable component must encode as an object");
-                }
-
-                result = encoded.getAsJsonObject();
-                copyLiteralMetadata(component, result);
-                tracker.add(true);
-            }
-        }
-
+        tracker.add(changed);
         tracker.add(translateComponentProperty(result, "extra"));
         tracker.add(translateComponentProperty(result, "separator"));
         tracker.add(translateComponentArguments(result, "with"));
@@ -361,19 +429,215 @@ public final class TranslationUtils {
         return new TransformResult(result, tracker.isChanged());
     }
 
-    private static boolean isLiteralComponent(JsonObject component) {
-        if (!component.has("text") || !component.get("text").isJsonPrimitive()) return false;
-        if (!component.get("text").getAsJsonPrimitive().isString()) return false;
-        return !component.has("type") || "text".equals(component.get("type").getAsString());
+    /**
+     * Translates an array of components as a sequence.  Adjacent pieces with the same style are
+     * intentionally folded into one translatable component, which is what makes
+     * {@code text + score + text} become one {@code translate/with} component instead of three
+     * unrelated language entries.
+     */
+    private static TransformResult translateComponentArray(JsonArray source) {
+        JsonArray result = new JsonArray();
+        boolean changed = false;
+        int cursor = 0;
+        while (cursor < source.size()) {
+            JsonElement element = source.get(cursor);
+            if (!isComponentElement(element)) {
+                result.add(element.deepCopy());
+                cursor++;
+                continue;
+            }
+
+            int end = cursor + 1;
+            String textStyle = isTextElement(source.get(cursor))
+                    ? componentStyle(source.get(cursor))
+                    : null;
+            while (end < source.size()
+                    && isComponentElement(source.get(end))) {
+                JsonElement next = source.get(end);
+                // Dynamic components carry their own style inside the `with` argument and must
+                // not split the surrounding literal sequence.  Literal siblings still need equal
+                // style, otherwise folding them would silently lose per-piece formatting.
+                if (isTextElement(next)) {
+                    String nextStyle = componentStyle(next);
+                    if (textStyle == null) textStyle = nextStyle;
+                    else if (!Objects.equals(textStyle, nextStyle)) break;
+                }
+                end++;
+            }
+
+            List<JsonElement> group = new ArrayList<>();
+            for (int i = cursor; i < end; i++) group.add(source.get(i).deepCopy());
+            TransformResult translated = translateComponentGroup(group);
+            result.add(translated.value());
+            changed |= translated.changed();
+            cursor = end;
+        }
+        return new TransformResult(result, changed);
     }
 
-    private static void copyLiteralMetadata(JsonObject source, JsonObject target) {
-        for (Map.Entry<String, JsonElement> entry : source.entrySet()) {
-            String name = entry.getKey();
-            if ("text".equals(name) || "type".equals(name)) continue;
-            target.add(name, entry.getValue().deepCopy());
+    private static TransformResult translateComponentGroup(List<JsonElement> group) {
+        JsonObject anchor = null;
+        StringBuilder template = new StringBuilder();
+        JsonArray arguments = new JsonArray();
+        boolean hasText = false;
+        boolean hasDynamicArgument = false;
+
+        for (JsonElement element : group) {
+            if (isTextElement(element)) {
+                JsonObject text =
+                        element.isJsonObject()
+                                ? element.getAsJsonObject()
+                                : new JsonObject();
+                String literal =
+                        element.isJsonPrimitive() ? element.getAsString() : text.get("text").getAsString();
+                if (anchor == null && element.isJsonObject()) anchor = text;
+                if (literal.isBlank()) continue;
+                hasText = true;
+                appendTextTemplate(literal, template, arguments);
+            } else {
+                TransformResult translated = translateComponentJson(element);
+                JsonElement argument = translated.value();
+                template.append("%s");
+                arguments.add(argument.deepCopy());
+                hasDynamicArgument = true;
+            }
         }
+
+        if (!hasText) {
+            if (group.size() == 1) return translateComponentJson(group.getFirst());
+            JsonArray unchanged = new JsonArray();
+            group.forEach(unchanged::add);
+            return TransformResult.unchanged(unchanged);
+        }
+
+        JsonObject translated = translatedTextObject(template.toString(), arguments, anchor);
+        return new TransformResult(translated, true);
     }
+
+    private static boolean isLiteralComponent(JsonObject component) {
+        return isTextElement(component)
+                && (!component.has("type") || "text".equals(component.get("type").getAsString()));
+    }
+
+    private static boolean isTextElement(JsonElement element) {
+        if (element == null || element.isJsonNull()) return false;
+        if (element.isJsonPrimitive()) return element.getAsJsonPrimitive().isString();
+        return element.isJsonObject()
+                && element.getAsJsonObject().has("text")
+                && element.getAsJsonObject().get("text").isJsonPrimitive()
+                && element.getAsJsonObject().get("text").getAsJsonPrimitive().isString();
+    }
+
+    private static boolean isComponentElement(JsonElement element) {
+        if (isTextElement(element)) return true;
+        if (!element.isJsonObject()) return false;
+        JsonObject object = element.getAsJsonObject();
+        return object.has("translate")
+                || object.has("score")
+                || object.has("selector")
+                || object.has("nbt")
+                || object.has("keybind")
+                || object.has("object");
+    }
+
+    private static String componentStyle(JsonElement element) {
+        if (!element.isJsonObject()) return "{}";
+        JsonObject style = element.getAsJsonObject().deepCopy();
+        for (String name :
+                List.of(
+                        "text", "type", "translate", "fallback", "with", "score", "selector",
+                        "nbt", "keybind", "object", "extra", "separator", LEGACY_HOVER_EVENT,
+                        HOVER_EVENT, LEGACY_CLICK_EVENT, CLICK_EVENT)) {
+            style.remove(name);
+        }
+        return style.toString();
+    }
+
+    private static TransformResult translateTextComponent(String literal, JsonObject metadata) {
+        if (literal == null || literal.isBlank()) return TransformResult.unchanged(metadata);
+
+        JsonArray arguments = new JsonArray();
+        StringBuilder template = new StringBuilder();
+        appendTextTemplate(literal, template, arguments);
+        return new TransformResult(
+                translatedTextObject(template.toString(), arguments, metadata), true);
+    }
+
+    private static JsonObject translatedTextObject(
+            String template, JsonArray arguments, JsonObject metadata) {
+        JsonObject result = new JsonObject();
+        result.addProperty("translate", TranslationContext.addEntry(template));
+        if (metadata != null) {
+            for (Map.Entry<String, JsonElement> entry : metadata.entrySet()) {
+                if ("text".equals(entry.getKey())
+                        || "type".equals(entry.getKey())
+                        || "translate".equals(entry.getKey())
+                        || "with".equals(entry.getKey())) continue;
+                result.add(entry.getKey(), entry.getValue().deepCopy());
+            }
+        }
+        // Keep component styling next to the translation key and append the parameters last.  This
+        // is also the conventional shape used by hand-written commands:
+        // {"translate":"...","color":"red","with":[...]}
+        if (!arguments.isEmpty()) result.add("with", arguments);
+        return result;
+    }
+
+    private static void appendTextTemplate(
+            String literal, StringBuilder template, JsonArray arguments) {
+        int cursor = 0;
+        MacroSpan macro;
+        while ((macro = nextMacro(literal, cursor)) != null) {
+            appendEscapedLiteral(template, literal.substring(cursor, macro.start()));
+            template.append("%s");
+            JsonObject argument = new JsonObject();
+            argument.addProperty("text", literal.substring(macro.start(), macro.end()));
+            arguments.add(argument);
+            cursor = macro.end();
+        }
+        appendEscapedLiteral(template, literal.substring(cursor));
+    }
+
+    private static void appendEscapedLiteral(StringBuilder template, String literal) {
+        template.append(literal.replace("%", "%%"));
+    }
+
+    private static boolean containsMacro(JsonElement json) {
+        if (json == null || json.isJsonNull()) return false;
+        if (json.isJsonPrimitive()) {
+            return json.getAsJsonPrimitive().isString()
+                    && nextMacro(json.getAsString(), 0) != null;
+        }
+        if (json.isJsonArray()) {
+            for (JsonElement child : json.getAsJsonArray()) {
+                if (containsMacro(child)) return true;
+            }
+            return false;
+        }
+        for (Map.Entry<String, JsonElement> entry : json.getAsJsonObject().entrySet()) {
+            if (containsMacro(entry.getValue())) return true;
+        }
+        return false;
+    }
+
+    /** Finds one Minecraft macro marker without treating nested parentheses as a valid name. */
+    private static MacroSpan nextMacro(String value, int from) {
+        if (value == null) return null;
+        int start = Math.max(0, from);
+        while ((start = value.indexOf("$(", start)) >= 0) {
+            int close = value.indexOf(')', start + 2);
+            if (close < 0) return null;
+            if (value.indexOf('(', start + 2) >= 0
+                    && value.indexOf('(', start + 2) < close) {
+                start += 2;
+                continue;
+            }
+            return new MacroSpan(start, close + 1);
+        }
+        return null;
+    }
+
+    private record MacroSpan(int start, int end) {}
 
     private static boolean translateComponentProperty(JsonObject component, String name) {
         if (!component.has(name)) return false;
@@ -396,6 +660,10 @@ public final class TranslationUtils {
                     && !(argument.isJsonPrimitive() && argument.getAsJsonPrimitive().isString())) {
                 continue;
             }
+            // A macro text is the parameter deliberately emitted by the surrounding
+            // translate component. Translating that argument again would recurse forever and
+            // would also replace the parameter with a second, unrelated key.
+            if (isTextElement(argument) && containsMacro(argument)) continue;
 
             TransformResult translated = translateComponentJson(argument);
             if (!translated.changed()) continue;
@@ -452,14 +720,22 @@ public final class TranslationUtils {
         String action = clickEvent.get("action").getAsString();
         if (!"run_command".equals(action)) return false;
 
-        String command = legacy ?
-            clickEvent.get("value").getAsString() :
-            clickEvent.get("command").getAsString();
+        // Both spellings have existed with both property names in datapacks in the wild.  The
+        // event key's casing is not enough to decide whether the command is under value or command.
+        String property =
+                clickEvent.has(legacy ? "value" : "command")
+                        ? (legacy ? "value" : "command")
+                        : (legacy ? "command" : "value");
+        if (!clickEvent.has(property)
+                || !clickEvent.get(property).isJsonPrimitive()
+                || !clickEvent.get(property).getAsJsonPrimitive().isString()) return false;
+
+        String command = clickEvent.get(property).getAsString();
         if (command.startsWith("/")) command = command.substring(1);
-        String translated = FunctionHandler.processFunction(command);
+        String translated = FunctionHandler.processNestedCommand(command);
         boolean changed = !command.equals(translated);
         if (changed) {
-            clickEvent.addProperty(legacy ? "value" : "command", translated);
+            clickEvent.addProperty(property, translated);
         }
 
         return changed;
@@ -468,8 +744,8 @@ public final class TranslationUtils {
     private static PathTransform translateJsonPath(
             JsonElement current, List<PathSegment> segments, int segmentIndex) {
         if (segmentIndex >= segments.size()) {
-            JsonElement translated = translateLiteral(current);
-            return new PathTransform(translated, translated != current);
+            TransformResult translated = translateJsonComponentTree(current);
+            return new PathTransform(translated.value(), translated.changed());
         }
 
         PathSegment segment = segments.get(segmentIndex);
@@ -525,6 +801,142 @@ public final class TranslationUtils {
         }
     }
 
+    /**
+     * Translates a component tree embedded in an arbitrary JSON schema.
+     *
+     * <p>Resource schemas such as dialogs are not themselves Minecraft chat components.  Running
+     * their {@code description}, {@code contents}, or action objects through the component codec
+     * therefore makes a valid nested component look invalid and drops the whole target.  This
+     * schema-neutral traversal only treats object/array children as nested components, preserves
+     * unknown dialog fields, and handles command-bearing action/event objects explicitly.
+     */
+    private static TransformResult translateJsonComponentTree(JsonElement json) {
+        if (json == null || json.isJsonNull()) return TransformResult.unchanged(json);
+        if (isComponentElement(json)) return translateComponentJson(json);
+
+        if (json.isJsonArray()) {
+            JsonArray source = json.getAsJsonArray();
+            if (isComponentSequence(source)) return translateComponentArray(source);
+
+            JsonArray result = new JsonArray();
+            boolean changed = false;
+            for (JsonElement child : source) {
+                TransformResult translated = translateJsonComponentTree(child);
+                result.add(translated.value());
+                changed |= translated.changed();
+            }
+            return new TransformResult(result, changed);
+        }
+
+        if (json.isJsonPrimitive()) return TransformResult.unchanged(json);
+
+        JsonObject object = json.getAsJsonObject();
+        ChangeTracker tracker = new ChangeTracker();
+        for (Map.Entry<String, JsonElement> entry : new ArrayList<>(object.entrySet())) {
+            String name = entry.getKey();
+            JsonElement child = entry.getValue();
+            TransformResult translated;
+            if (child.isJsonPrimitive()
+                    && child.getAsJsonPrimitive().isString()
+                    && isNestedComponentProperty(name)) {
+                translated = translateComponentJson(child);
+            } else if (child.isJsonObject() || child.isJsonArray()) {
+                translated = translateJsonComponentTree(child);
+            } else {
+                continue;
+            }
+            if (!translated.changed()) continue;
+            object.add(name, translated.value());
+            tracker.add(true);
+        }
+
+        tracker.add(translateJsonHoverEvent(object, LEGACY_HOVER_EVENT));
+        tracker.add(translateJsonHoverEvent(object, HOVER_EVENT));
+        tracker.add(translateClickEvent(object, LEGACY_CLICK_EVENT, true));
+        tracker.add(translateClickEvent(object, CLICK_EVENT, false));
+        tracker.add(translateDialogAction(object));
+        return new TransformResult(object, tracker.isChanged());
+    }
+
+    private static boolean isComponentSequence(JsonArray array) {
+        if (array.isEmpty()) return false;
+        for (JsonElement element : array) {
+            if (!isComponentElement(element)) return false;
+        }
+        return true;
+    }
+
+    private static boolean isNestedComponentProperty(String name) {
+        return switch (name) {
+            case "contents",
+                    "description",
+                    "title",
+                    "external_title",
+                    "label",
+                    "tooltip",
+                    "display",
+                    "separator",
+                    "extra",
+                    "name" -> true;
+            default -> false;
+        };
+    }
+
+    /** Handles legacy show_text hover values that are serialized as a JSON string. */
+    private static boolean translateJsonHoverEvent(JsonObject component, String name) {
+        if (!component.has(name) || !component.get(name).isJsonObject()) return false;
+
+        JsonObject event = component.getAsJsonObject(name);
+        if (!event.has("action")
+                || !event.get("action").isJsonPrimitive()
+                || !"show_text".equals(event.get("action").getAsString())) {
+            return false;
+        }
+
+        boolean changed = false;
+        for (String contentName : List.of("contents", "value")) {
+            JsonElement content = event.get(contentName);
+            if (content == null || !content.isJsonPrimitive()
+                    || !content.getAsJsonPrimitive().isString()) continue;
+
+            String raw = content.getAsString();
+            JsonElement parsed;
+            try {
+                parsed = JsonParser.parseString(raw);
+            } catch (JsonParseException ignored) {
+                parsed = new JsonPrimitive(raw);
+            }
+            TransformResult translated = translateJsonComponentTree(parsed);
+            if (!translated.changed()) continue;
+            event.add(contentName, translated.value());
+            changed = true;
+        }
+        return changed;
+    }
+
+    /** Processes the click-like action object used by the dialog schema. */
+    private static boolean translateDialogAction(JsonObject object) {
+        if (!object.has("type")
+                || !object.get("type").isJsonPrimitive()
+                || !object.get("type").getAsJsonPrimitive().isString()
+                || !object.has("command")
+                || !object.get("command").isJsonPrimitive()
+                || !object.get("command").getAsJsonPrimitive().isString()) {
+            return false;
+        }
+
+        String type = object.get("type").getAsString();
+        if (!"run_command".equals(type) && !"suggest_command".equals(type)) return false;
+
+        String original = object.get("command").getAsString();
+        String prefix = original.startsWith("/") ? "/" : "";
+        String command = prefix.isEmpty() ? original : original.substring(prefix.length());
+        String translated = FunctionHandler.processNestedCommand(command);
+        if (command.equals(translated)) return false;
+        object.addProperty("command", prefix + translated);
+        return true;
+    }
+
     /** Converts a JSON member name into a language-key segment. */
     private static String keySegment(String name) {
         if (name.isEmpty()) return "";
@@ -535,7 +947,7 @@ public final class TranslationUtils {
 
     private static List<PathSegment> parseJsonPath(String path) {
         List<PathSegment> segments = new ArrayList<>();
-        for (String rawSegment : path.split("\\.")) {
+        for (String rawSegment : splitPath(path, '.')) {
             int bracket = rawSegment.indexOf('[');
             if (bracket < 0) {
                 segments.add(new PathSegment(rawSegment, -1, false, false));
@@ -554,6 +966,17 @@ public final class TranslationUtils {
                 segments.add(
                         new PathSegment(name, Integer.parseInt(selector), false, true));
             }
+        }
+        return segments;
+    }
+
+    private static List<String> splitPath(String path, char separator) {
+        List<String> segments = new ArrayList<>();
+        int start = 0;
+        for (int index = 0; index <= path.length(); index++) {
+            if (index != path.length() && path.charAt(index) != separator) continue;
+            segments.add(path.substring(start, index));
+            start = index + 1;
         }
         return segments;
     }
@@ -611,7 +1034,8 @@ public final class TranslationUtils {
 
     private record TagPath(String[] parents, String name) {
         private static TagPath of(String path) {
-            String[] names = path.split("\\.");
+            List<String> split = splitPath(path, '.');
+            String[] names = split.toArray(String[]::new);
             String[] parents = new String[Math.max(0, names.length - 1)];
             System.arraycopy(names, 0, parents, 0, parents.length);
             return new TagPath(parents, names[names.length - 1]);

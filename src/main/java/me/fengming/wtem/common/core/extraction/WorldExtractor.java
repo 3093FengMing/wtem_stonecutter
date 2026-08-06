@@ -9,6 +9,8 @@ import me.fengming.wtem.common.core.extraction.export.ExtractionSchema;
 import me.fengming.wtem.common.core.extraction.export.ResourcePackExporter;
 import me.fengming.wtem.common.core.extraction.manifest.ExtractionManifest;
 import me.fengming.wtem.common.core.extraction.service.ExtractionProgress;
+import me.fengming.wtem.common.core.extraction.service.ExtractionChunkProgress;
+import me.fengming.wtem.common.core.extraction.service.AiTranslationProgress;
 import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.extraction.service.ExtractionReport;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
@@ -87,6 +89,8 @@ import org.jetbrains.annotations.NotNull;
 public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     private final ExtractionSession session = new ExtractionSession();
     private final AtomicBoolean closed = new AtomicBoolean();
+    /** Counts completed chunk stages so a later data-fix reset cannot erase earlier UI progress. */
+    private final ExtractionChunkProgress chunkProgress = new ExtractionChunkProgress();
 
     //? if >=26.1 {
 
@@ -172,8 +176,17 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         return this.session.report();
     }
 
+    public AiTranslationProgress getAiTranslationProgress() {
+        return this.session.aiTranslationProgress();
+    }
+
     public ExtractionProgress getExtractionProgress() {
         //? if >=26.1 {
+        int currentTotal = this.upgradeProgress.getTotalChunks();
+        int currentConverted = this.upgradeProgress.getConverted();
+        int currentSkipped = this.upgradeProgress.getSkipped();
+        ExtractionChunkProgress.Snapshot totals =
+                this.chunkProgress.snapshot(currentTotal, currentConverted, currentSkipped);
         List<ExtractionProgress.DimensionProgress> dimensions =
                 this.orderedLevels.stream()
                         .map(level ->
@@ -181,13 +194,18 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                                         level, this.upgradeProgress.getDimensionProgress(level)))
                         .toList();
         return new ExtractionProgress(
-                this.upgradeProgress.getTotalChunks(),
-                this.upgradeProgress.getConverted(),
-                this.upgradeProgress.getSkipped(),
-                this.upgradeProgress.getTotalProgress(),
+                totals.totalChunks(),
+                totals.converted(),
+                totals.skipped(),
+                totals.totalProgress(),
                 dimensions);
         //?} else {
-        /*List<ExtractionProgress.DimensionProgress> dimensions =
+        /*int currentTotal = this.getTotalChunks();
+        int currentConverted = this.getConverted();
+        int currentSkipped = this.getSkipped();
+        ExtractionChunkProgress.Snapshot totals =
+                this.chunkProgress.snapshot(currentTotal, currentConverted, currentSkipped);
+        List<ExtractionProgress.DimensionProgress> dimensions =
                 this.levels().stream()
                         .sorted(Comparator.comparing(ResourceIds::key))
                         .map(level ->
@@ -195,10 +213,10 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                                         level, this.dimensionProgress(level)))
                         .toList();
         return new ExtractionProgress(
-                this.getTotalChunks(),
-                this.getConverted(),
-                this.getSkipped(),
-                this.getProgress(),
+                totals.totalChunks(),
+                totals.converted(),
+                totals.skipped(),
+                totals.totalProgress(),
                 dimensions);
         *///?}
     }
@@ -360,14 +378,57 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     }
 
     private static String sanitizePackId(String packId) {
-        String sanitized = packId.replaceAll("[^A-Za-z0-9._-]", "_");
-        sanitized = sanitized.replaceAll("^\\.+|\\.+$", "_");
+        String sanitized = sanitizeAsciiSegment(packId);
+        int firstNonDot = 0;
+        while (firstNonDot < sanitized.length() && sanitized.charAt(firstNonDot) == '.') {
+            firstNonDot++;
+        }
+        int afterLastNonDot = sanitized.length();
+        while (afterLastNonDot > firstNonDot
+                && sanitized.charAt(afterLastNonDot - 1) == '.') {
+            afterLastNonDot--;
+        }
+        if (firstNonDot > 0 || afterLastNonDot < sanitized.length()) {
+            if (firstNonDot == sanitized.length()) {
+                sanitized = "_";
+            } else {
+                StringBuilder bounded = new StringBuilder(sanitized.length());
+                if (firstNonDot > 0) bounded.append('_');
+                bounded.append(sanitized, firstNonDot, afterLastNonDot);
+                if (afterLastNonDot < sanitized.length()) bounded.append('_');
+                sanitized = bounded.toString();
+            }
+        }
         if (sanitized.length() > 64) sanitized = sanitized.substring(0, 64);
         return sanitized.isBlank() ? "pack" : sanitized;
     }
 
     private static boolean isGeneratedCompanionPack(String packId) {
-        return packId.matches(".*_[0-9a-f]{8}_wtem");
+        if (packId == null || !packId.endsWith("_wtem")) return false;
+        int marker = packId.length() - 14;
+        if (marker < 0 || packId.charAt(marker) != '_') return false;
+        for (int index = marker + 1; index < marker + 9; index++) {
+            char character = packId.charAt(index);
+            if (!((character >= '0' && character <= '9')
+                    || (character >= 'a' && character <= 'f'))) return false;
+        }
+        return packId.charAt(marker + 9) == '_';
+    }
+
+    private static String sanitizeAsciiSegment(String value) {
+        StringBuilder sanitized = new StringBuilder(value.length());
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            boolean allowed =
+                    (character >= 'A' && character <= 'Z')
+                            || (character >= 'a' && character <= 'z')
+                            || (character >= '0' && character <= '9')
+                            || character == '.'
+                            || character == '_'
+                            || character == '-';
+            sanitized.append(allowed ? character : '_');
+        }
+        return sanitized.toString();
     }
 
     private static String shortHash(String value) {
@@ -519,6 +580,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     private void work(DataFixTypes dataFixType, AbstractWHandler<CompoundTag> handler, String folderName) {
         List<RegionStorageUpgrader> upgraders = new ArrayList<>();
+        beginChunkStage();
         this.upgradeProgress.reset(dataFixType);
         this.upgradeProgress.setType(UpgradeProgress.Type.REGIONS);
         int previousCopiesFileAmounts = 0;
@@ -535,6 +597,15 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             upgrader.upgrade();
         }
     }
+
+    /** Moves the previous region/entity stage into the cumulative UI counters before reset(). */
+    private void beginChunkStage() {
+        this.chunkProgress.beginStage(
+                this.upgradeProgress.getTotalChunks(),
+                this.upgradeProgress.getConverted(),
+                this.upgradeProgress.getSkipped());
+    }
+
     //?} else {
 
     /*@Override
@@ -545,19 +616,25 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             runStage(
                     WtemConfig.Stage.REGION,
                     () ->
-                            new ChunkExtractor(
-                                            new BlockEntityWHandler(),
-                                            DataFixTypes.CHUNK,
-                                            "region")
-                                    .upgrade());
+                            {
+                                beginLegacyChunkStage();
+                                new ChunkExtractor(
+                                                new BlockEntityWHandler(),
+                                                DataFixTypes.CHUNK,
+                                                "region")
+                                        .upgrade();
+                            });
             runStage(
                     WtemConfig.Stage.ENTITIES,
                     () ->
-                            new ChunkExtractor(
-                                            new EntityWHandler(),
-                                            DataFixTypes.ENTITY_CHUNK,
-                                            "entities")
-                                    .upgrade());
+                            {
+                                beginLegacyChunkStage();
+                                new ChunkExtractor(
+                                                new EntityWHandler(),
+                                                DataFixTypes.ENTITY_CHUNK,
+                                                "entities")
+                                        .upgrade();
+                            });
             if (!shouldStop()) runNonRegionExtraction();
             if (!shouldStop()) saveLegacySavedData();
             finishRun();
@@ -572,6 +649,12 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                 TranslationContext.release();
             }
         }
+    }
+    *///?}
+
+    //? if <26.1 {
+    /*private void beginLegacyChunkStage() {
+        this.chunkProgress.beginStage(this.getTotalChunks(), this.getConverted(), this.getSkipped());
     }
     *///?}
 
@@ -612,6 +695,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     private void beginRun() {
         TranslationContext.clear();
+        TranslationContext.setDiagnostics(this.session.diagnostics());
         TranslationContext.setConfig(this.config);
         TranslationContext.setKeyReuse(this.config.keyReuse());
         TranslationContext.setKeyNaming(this.config.keyNaming());
@@ -631,35 +715,67 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         if (shouldStop()) {
             publishPartialLanguage();
             this.session.completeCancellation();
-            logDiagnostics();
+            logDiagnostics(0);
             return;
         }
 
         exportLanguage(languageOutput());
         exportManifest();
         exportSchema();
-        Path aiFile = exportAiTranslation();
+        // Normal extraction is complete at this point. Publish its diagnostics before the
+        // optional AI request so a slow provider cannot hide useful warnings from the user.
+        int loggedDiagnostics = logDiagnostics(0);
+        Path aiFile = null;
+        if (this.config.aiTranslation().enabled()) {
+            Map<String, String> source = TranslationContext.snapshot();
+            this.session.beginAiTranslation(
+                    AiTranslationExporter.countTranslatableEntries(source),
+                    AiTranslationExporter.countBatches(this.config.aiTranslation(), source));
+            try {
+                aiFile = exportAiTranslation(source);
+            } finally {
+                this.session.finishAiTranslation();
+            }
+            if (shouldStop()) {
+                publishPartialLanguage();
+                this.session.completeCancellation();
+                logDiagnostics(loggedDiagnostics);
+                return;
+            }
+        }
         exportResourcePack(aiFile);
         this.session.complete();
-        logDiagnostics();
+        logDiagnostics(loggedDiagnostics);
     }
 
     private void handleFatalFailure(Throwable throwable) {
         this.session.setTranslatedEntries(TranslationContext.extractedEntryCount());
         this.session.fail(throwable);
         publishPartialLanguage();
-        logDiagnostics();
+        logDiagnostics(0);
         Wtem.LOGGER.error("Failed to extract world", throwable);
     }
 
-    private void logDiagnostics() {
-        for (ExtractionDiagnostics.Failure failure : this.session.diagnostics().failures()) {
-            Wtem.LOGGER.warn(
-                    "Extraction warning [{}] {}",
-                    failure.scope(),
-                    failure.resource(),
-                    failure.cause());
+    private int logDiagnostics(int alreadyLogged) {
+        var failures = this.session.diagnostics().failures();
+        int start = Math.max(0, Math.min(alreadyLogged, failures.size()));
+        for (int i = start; i < failures.size(); i++) {
+            ExtractionDiagnostics.Failure failure = failures.get(i);
+            if (failure.cause() == null) {
+                Wtem.LOGGER.warn(
+                        "Extraction warning [{}] {}: {}",
+                        failure.scope(),
+                        failure.resource(),
+                        failure.displayMessage());
+            } else {
+                Wtem.LOGGER.warn(
+                        "Extraction warning [{}] {}",
+                        failure.scope(),
+                        failure.resource(),
+                        failure.cause());
+            }
         }
+        return failures.size();
     }
 
     private void publishPartialLanguage() {
@@ -709,7 +825,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         }
     }
 
-    private Path exportAiTranslation() {
+    private Path exportAiTranslation(Map<String, String> source) {
         if (!this.config.aiTranslation().enabled()) return null;
         Path file = levelRoot().resolve(this.config.aiTranslation().outputFile()).normalize();
         if (!file.startsWith(levelRoot().normalize())) {
@@ -736,7 +852,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         return AiTranslationExporter.export(
                         this.config.aiTranslation(),
                         file,
-                        TranslationContext.snapshot(),
+                        source,
                         this.session)
                 ? file
                 : null;
@@ -875,7 +991,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
         private String safeOutputSegment(String value) {
             String sanitized = value.replace(':', '_').replace('/', '_').replace('\\', '_');
-            return sanitized.replaceAll("[^A-Za-z0-9._-]", "_");
+            return sanitizeAsciiSegment(sanitized);
         }
 
         private int chunkX(ChunkPos chunkPos) {

@@ -8,11 +8,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import me.fengming.wtem.common.Wtem;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
+import me.fengming.wtem.common.core.extraction.service.VanillaSavedDataFiles;
 import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIo;
@@ -29,29 +29,6 @@ import net.minecraft.nbt.Tag;
  * @author FengMing
  */
 public final class SavedDataExtractor {
-    private static final Set<String> COMPONENT_NAMES =
-            Set.of(
-                    "name",
-                    "custom_name",
-                    "customname",
-                    "title",
-                    "subtitle",
-                    "description",
-                    "text",
-                    "message",
-                    "label",
-                    "display_name",
-                    "displayname",
-                    "lore",
-                    "messages",
-                    "pages",
-                    "lines",
-                    "raw",
-                    "front_text",
-                    "prompt",
-                    "tooltip",
-                    "error_message");
-
     private final Path dataDirectory;
     private final WtemConfig config;
     private final ExtractionSession session;
@@ -73,13 +50,14 @@ public final class SavedDataExtractor {
     private void extractFile(Path file) {
         String fileName =
                 this.dataDirectory.relativize(file).toString().replace('\\', '/');
+        if (VanillaSavedDataFiles.isVanilla(fileName)) return;
         if (!this.config.filters().selection().matchesStorageFile(fileName)) return;
         try (var fileTransaction = TranslationContext.beginTransaction();
                 InputStream input = Files.newInputStream(file)) {
             int fileRecordsBefore = TranslationContext.recordCount();
             CompoundTag root = NbtIo.readCompressed(input, NbtAccounter.unlimitedHeap());
             CompoundTag entries = contentRoot(root);
-            boolean changed = false;
+            ChangeTracker changeTracker = new ChangeTracker();
             for (String key : sortedKeys(entries)) {
                 if (this.session.isCancellationRequested()) return;
                 String location = fileName + "/" + key;
@@ -93,13 +71,13 @@ public final class SavedDataExtractor {
                         continue;
                     }
                     transaction.commit();
-                    changed |= entryChanged;
+                    changeTracker.add(entryChanged);
                 } catch (RuntimeException exception) {
                     this.session.diagnostics().record("saved_data", location, exception);
                     Wtem.LOGGER.warn("Failed to process saved-data entry {}", location, exception);
                 }
             }
-            if (!changed) {
+            if (!changeTracker.isChanged()) {
                 if (TranslationContext.hasOnlyCatalogEntriesSince(fileRecordsBefore)) {
                     fileTransaction.commit();
                 }
@@ -123,6 +101,13 @@ public final class SavedDataExtractor {
                                             .toString()
                                             .toLowerCase(Locale.ROOT)
                                             .endsWith(".dat"))
+                    .filter(
+                            path ->
+                                    !VanillaSavedDataFiles.isVanilla(
+                                            this.dataDirectory
+                                                    .relativize(path)
+                                                    .toString()
+                                                    .replace('\\', '/')))
                     .sorted(
                             Comparator.comparing(
                                     path ->
@@ -150,8 +135,14 @@ public final class SavedDataExtractor {
         ChangeTracker tracker = new ChangeTracker();
         String normalized = name.toLowerCase(Locale.ROOT);
         String location = fileName + "/" + keyPath.replace('.', '/');
-        if (isLikelyComponent(normalized, value)
-                && this.config.filters().matchesStorage(fileName, location)) {
+        boolean selected = this.config.filters().matchesStorage(fileName, location);
+        if (value instanceof StringTag && selected) {
+            // SavedData strings cannot be distinguished reliably from human-facing text without
+            // knowing the owning mod's schema. Always report them for manual review, while the
+            // conservative component heuristic below still controls catalog extraction.
+            recordStringWarning(fileName, keyPath, NbtUtils.getString(parent, name));
+        }
+        if (isLikelyComponent(normalized, value) && selected) {
             if (value instanceof StringTag) {
                 String text = NbtUtils.getString(parent, name);
                 if (!looksLikeSerializedJson(text)) {
@@ -179,35 +170,52 @@ public final class SavedDataExtractor {
                                 keyPath + "." + child));
             }
         } else if (value instanceof ListTag list) {
-            for (int i = 0; i < list.size(); i++) {
-                Tag child = list.get(i);
-                String childPath = keyPath + "." + i;
-                if (child instanceof CompoundTag childCompound) {
-                    for (String childName : sortedKeys(childCompound)) {
+            tracker.add(visitList(list, normalized, fileName, keyPath));
+        }
+        return tracker.isChanged();
+    }
+
+    private boolean visitList(ListTag list, String fieldName, String fileName, String keyPath) {
+        ChangeTracker tracker = new ChangeTracker();
+        for (int i = 0; i < list.size(); i++) {
+            Tag child = list.get(i);
+            String childPath = keyPath + "." + i;
+            String childLocation = fileName + "/" + childPath.replace('.', '/');
+            boolean selected = this.config.filters().matchesStorage(fileName, childLocation);
+            if (child instanceof StringTag && selected) {
+                recordStringWarning(fileName, childPath, NbtUtils.getString(list, i));
+            }
+
+            if (child instanceof CompoundTag compound) {
+                boolean componentChanged =
+                        selected
+                                && isLikelyComponent(fieldName, compound)
+                                && TranslationUtils.translateNbtComponent(
+                                        list, i, safeKeyPath(fileName, childPath));
+                tracker.add(componentChanged);
+                if (!componentChanged) {
+                    for (String childName : sortedKeys(compound)) {
                         tracker.add(
                                 visit(
-                                        childCompound,
+                                        compound,
                                         childName,
-                                        childCompound.get(childName),
+                                        compound.get(childName),
                                         fileName,
                                         childPath + "." + childName));
                     }
-                } else if (isLikelyComponent(normalized, child)
-                        && this.config
-                                .filters()
-                                .matchesStorage(
-                                        fileName,
-                                        fileName + "/" + childPath.replace('.', '/'))) {
-                    String key = safeKeyPath(fileName, childPath);
-                    if (child instanceof StringTag) {
-                        String text = NbtUtils.getString(list, i);
-                        if (!looksLikeSerializedJson(text)) {
-                            addCatalogString(text, key);
-                            continue;
-                        }
-                    }
-                    tracker.add(TranslationUtils.translateNbtComponent(list, i, key));
                 }
+            } else if (child instanceof ListTag nested) {
+                tracker.add(visitList(nested, fieldName, fileName, childPath));
+            } else if (selected && isLikelyComponent(fieldName, child)) {
+                String key = safeKeyPath(fileName, childPath);
+                if (child instanceof StringTag textTag) {
+                    String text = NbtUtils.getStringValue(textTag);
+                    if (!looksLikeSerializedJson(text)) {
+                        addCatalogString(text, key);
+                        continue;
+                    }
+                }
+                tracker.add(TranslationUtils.translateNbtComponent(list, i, key));
             }
         }
         return tracker.isChanged();
@@ -220,7 +228,25 @@ public final class SavedDataExtractor {
     private static String safeKeyPath(String fileName, String keyPath) {
         String fileStem =
                 fileName.substring(0, fileName.length() - ".dat".length());
-        return (fileStem + "." + keyPath).replaceAll("[^A-Za-z0-9._-]", "_");
+        String raw = fileStem + "." + keyPath;
+        StringBuilder safe = new StringBuilder(raw.length());
+        for (int i = 0; i < raw.length(); i++) {
+            char character = raw.charAt(i);
+            safe.append(
+                    isAsciiAlphaNumeric(character)
+                                    || character == '.'
+                                    || character == '_'
+                                    || character == '-'
+                            ? character
+                            : '_');
+        }
+        return safe.toString();
+    }
+
+    private static boolean isAsciiAlphaNumeric(char character) {
+        return character >= 'A' && character <= 'Z'
+                || character >= 'a' && character <= 'z'
+                || character >= '0' && character <= '9';
     }
 
     private static void addCatalogString(String text, String keyPath) {
@@ -230,6 +256,20 @@ public final class SavedDataExtractor {
         }
     }
 
+    private void recordStringWarning(String fileName, String keyPath, String text) {
+        String location = fileName + "/" + keyPath.replace('.', '/');
+        String kind = looksLikeSerializedJson(text) ? "serialized text component" : "plain text";
+        this.session
+                .diagnostics()
+                .recordWarning(
+                        "saved_data_string",
+                        location,
+                        "SavedData "
+                                + kind
+                                + " is stored as an NBT string and may need manual review: key "
+                                + safeKeyPath(fileName, keyPath));
+    }
+
     private static boolean looksLikeSerializedJson(String text) {
         if (text == null) return false;
         String value = text.trim();
@@ -237,11 +277,16 @@ public final class SavedDataExtractor {
                 && (value.charAt(0) == '{' || value.charAt(0) == '[' || value.charAt(0) == '"');
     }
 
-    private static boolean isLikelyComponent(String name, Tag value) {
-        if (COMPONENT_NAMES.contains(name)) return true;
+    private boolean isLikelyComponent(String name, Tag value) {
+        if (this.config.savedDataTextFields().contains(name)) return true;
         if (!(value instanceof CompoundTag compound)) return false;
         return compound.contains("text")
                 || compound.contains("translate")
+                || compound.contains("score")
+                || compound.contains("selector")
+                || compound.contains("nbt")
+                || compound.contains("keybind")
+                || compound.contains("object")
                 || compound.contains("type") && compound.contains("value");
     }
 }

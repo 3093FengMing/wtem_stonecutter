@@ -8,6 +8,7 @@ package me.fengming.wtem.common.core.extraction.service;
 public enum ExtractionStatus {
     READY,
     RUNNING,
+    AI_TRANSLATING,
     CANCELLING,
     SUCCEEDED,
     SUCCEEDED_WITH_WARNINGS,

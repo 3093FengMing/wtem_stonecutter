@@ -67,14 +67,8 @@ public final class ExtractionSchema {
         outputs.addProperty("region_snbt_directory", config.outputs().regionSnbtDirectory());
         outputs.addProperty("schema_file", config.outputs().schemaFile());
         schema.add("outputs", outputs);
-        JsonObject ai = new JsonObject();
-        ai.addProperty("translation_enabled", config.aiTranslation().enabled());
-        ai.addProperty("translation_usable", config.aiTranslation().usable());
-        ai.addProperty("key_naming_enabled", config.keyNaming().scheme() == WtemConfig.KeyNaming.Scheme.AI);
-        ai.addProperty("model", config.aiTranslation().model());
-        ai.addProperty("target_language", config.aiTranslation().targetLanguage());
-        ai.addProperty("translation_prompt", config.aiTranslation().translationPrompt());
-        ai.addProperty("key_naming_prompt", config.aiTranslation().keyNamingPrompt());
+
+        JsonObject ai = createAi(config);
         schema.add("ai", ai);
         schema.addProperty("key_naming_scheme", config.keyNaming().scheme().id());
         schema.addProperty("resource_pack_enabled", config.resourcePack().enabled());
@@ -85,6 +79,18 @@ public final class ExtractionSchema {
         schema.addProperty("record_count", records.size());
         schema.addProperty("language_entry_count", TranslationContext.snapshot().size());
         return new com.google.gson.GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(schema);
+    }
+
+    private static JsonObject createAi(WtemConfig config) {
+        JsonObject ai = new JsonObject();
+        ai.addProperty("translation_enabled", config.aiTranslation().enabled());
+        ai.addProperty("translation_usable", config.aiTranslation().usable());
+        ai.addProperty("key_naming_enabled", config.keyNaming().scheme() == WtemConfig.KeyNaming.Scheme.AI);
+        ai.addProperty("model", config.aiTranslation().model());
+        ai.addProperty("target_language", config.aiTranslation().targetLanguage());
+        ai.addProperty("translation_prompt", config.aiTranslation().translationPrompt());
+        ai.addProperty("key_naming_prompt", config.aiTranslation().keyNamingPrompt());
+        return ai;
     }
 
     private static void addStrings(JsonObject object, String name, List<String> values) {

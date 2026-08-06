@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import java.util.Map;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
@@ -102,5 +103,34 @@ class TranslationUtilsTest {
 
         assertEquals(Map.of(), TranslationContext.snapshot());
         assertEquals("datapack.test.dialog", TranslationContext.getKey());
+    }
+
+    @Test
+    void parameterizesMacroTextInsteadOfPuttingTheMacroInTheTranslationKey() {
+        JsonElement result =
+                TranslationUtils.translateLiteral(
+                        JsonParser.parseString("{\"text\":\"판매가: $(sale)원\"}"));
+
+        assertEquals(
+                "판매가: %s원",
+                TranslationContext.snapshot().get("datapack.test.dialog"));
+        assertEquals(
+                "{\"translate\":\"datapack.test.dialog\",\"with\":[{\"text\":\"$(sale)\"}]}",
+                result.toString());
+    }
+
+    @Test
+    void foldsAComponentArgumentBetweenLiteralSiblingsIntoOneTranslation() {
+        JsonElement result =
+                TranslationUtils.translateLiteral(
+                        JsonParser.parseString(
+                                "[{\"text\":\"A \"},{\"score\":{\"name\":\"a1\",\"objective\":\"b2\"}},{\"text\":\" B\"}]"));
+
+        assertEquals(
+                "A %s B",
+                TranslationContext.snapshot().get("datapack.test.dialog"));
+        assertEquals(
+                "[{\"translate\":\"datapack.test.dialog\",\"with\":[{\"score\":{\"name\":\"a1\",\"objective\":\"b2\"}}]}]",
+                result.toString());
     }
 }

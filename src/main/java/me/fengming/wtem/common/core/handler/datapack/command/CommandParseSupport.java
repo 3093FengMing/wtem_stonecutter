@@ -1,5 +1,9 @@
 package me.fengming.wtem.common.core.handler.datapack.command;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
 import com.mojang.brigadier.ParseResults;
 import com.mojang.brigadier.context.CommandContextBuilder;
 import com.mojang.brigadier.context.ParsedArgument;
@@ -8,12 +12,12 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.visitor.EntityTagVisitor;
 import me.fengming.wtem.common.util.NbtUtils;
-import me.fengming.wtem.common.util.ResourceIds;
 import me.fengming.wtem.common.util.TranslationUtils;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
@@ -26,10 +30,16 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.data.registries.VanillaRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.nbt.TagParser;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
+//? if >=1.21.6 {
+import com.mojang.serialization.JsonOps;
+import net.minecraft.server.dialog.Dialog;
+//?}
 //? if >=1.21.11
 import net.minecraft.server.permissions.PermissionSet;
 import net.minecraft.world.phys.Vec2;
@@ -43,6 +53,7 @@ final class CommandParseSupport {
     private static final int MAX_COMMAND_LENGTH = 2_000_000;
     private static final ThreadLocal<ParserContext> COMMAND_PARSER = new ThreadLocal<>();
     private static final ThreadLocal<ExtractionDiagnostics> COMMAND_DIAGNOSTICS = new ThreadLocal<>();
+    private static final Set<String> TEXT_COMPONENTS = Set.of("text", "translate", "score", "selector", "nbt", "keybind", "object");
 
     private CommandParseSupport() {}
 
@@ -73,10 +84,18 @@ final class CommandParseSupport {
             ParserContext parser, MacroArgumentRestorer.CommandLine line) {
         List<MacroArgumentRestorer.Replacement> replacements = findReplacements(parser, line);
         if (replacements.isEmpty()) return CommandExtraction.unchanged(line.source());
+        String candidate = line.render(replacements);
+        if (!isSafeGeneratedCommand(candidate)) {
+            recordCommandWarning(
+                    "function_component_rewrite",
+                    candidate,
+                    "Generated component JSON could not be parsed; the original command was kept");
+            return CommandExtraction.unchanged(line.source());
+        }
         if (!isValidCommand(parser, applyReplacements(line.text(), replacements))) {
             return CommandExtraction.unchanged(line.source());
         }
-        return CommandExtraction.changed(line.render(replacements));
+        return CommandExtraction.changed(candidate);
     }
 
     /**
@@ -90,6 +109,9 @@ final class CommandParseSupport {
         // `1`) rather than the runtime function/storage value. Do not turn that placeholder into a
         // false caller edge; only concrete call arguments belong in the static graph.
         if (sourceLine.contains("$(")) return null;
+        MacroCallGraph.ParsedInvocation nested =
+                parseNestedFunctionInvocation(parser, sourceLine);
+        if (nested != null) return nested;
         MacroArgumentRestorer.CommandLine line =
                 MacroArgumentRestorer.CommandLine.of(sourceLine.trim());
         String command = line.text();
@@ -143,6 +165,9 @@ final class CommandParseSupport {
             ParserContext parser, String sourceLine) {
         // The value written by a macro command is runtime data, not a compile-time literal.
         if (sourceLine.contains("$(")) return null;
+        MacroCallGraph.StorageAssignment nested =
+                parseNestedStorageAssignment(parser, sourceLine);
+        if (nested != null) return nested;
         MacroArgumentRestorer.CommandLine line =
                 MacroArgumentRestorer.CommandLine.of(sourceLine.trim());
         String command = line.text();
@@ -193,6 +218,81 @@ final class CommandParseSupport {
         return parseStorageAssignment(parserContext(), sourceLine);
     }
 
+    /** Records a warning for a literal string written directly into command storage. */
+    private static void recordBareStorageStringWarning(
+            String command, CommandContextBuilder<CommandSourceStack> context) {
+        if (!containsCommandNode(context, "data")
+                || !containsCommandNode(context, "modify")
+                || !containsCommandNode(context, "storage")
+                || !containsCommandNode(context, "set")
+                || !containsCommandNode(context, "value")) {
+            return;
+        }
+        ParsedArgument<CommandSourceStack, ?> value = findArgument(context, "value", "nbt", "tag");
+        if (value == null || !(value.getResult() instanceof StringTag)) return;
+        recordCommandWarning(
+                "function_storage_string",
+                command,
+                "A bare string written directly to data storage may be user-facing text and needs manual review");
+    }
+
+    /**
+     * The execute condition grammar is context-sensitive to the command source.  A static
+     * extraction source has no selected entity, so some otherwise valid score predicates stop the
+     * top-level Brigadier parse before it reaches {@code run}.  The command after {@code run} is
+     * still an ordinary command and can be parsed independently; the caller graph only needs that
+     * command's arguments, while the condition prefix is retained separately by MacroCallGraph.
+     */
+    private static MacroCallGraph.ParsedInvocation parseNestedFunctionInvocation(
+            ParserContext parser, String sourceLine) {
+        String nested = nestedCommand(sourceLine);
+        return nested == null ? null : parseFunctionInvocation(parser, nested);
+    }
+
+    private static MacroCallGraph.StorageAssignment parseNestedStorageAssignment(
+            ParserContext parser, String sourceLine) {
+        String nested = nestedCommand(sourceLine);
+        return nested == null ? null : parseStorageAssignment(parser, nested);
+    }
+
+    private static String nestedCommand(String sourceLine) {
+        String command = sourceLine == null ? "" : sourceLine.trim();
+        if (!command.startsWith("execute ")) return null;
+        int run = executeRunIndex(command);
+        if (run < 0) return null;
+        int start = run + " run ".length();
+        while (start < command.length() && Character.isWhitespace(command.charAt(start))) start++;
+        return start >= command.length() ? null : command.substring(start);
+    }
+
+    private static int executeRunIndex(String command) {
+        char quote = 0;
+        boolean escaped = false;
+        int squareDepth = 0;
+        int compoundDepth = 0;
+        for (int i = 0; i < command.length() - 4; i++) {
+            char character = command.charAt(i);
+            if (quote != 0) {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = 0;
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+                continue;
+            }
+            if (character == '[') squareDepth++;
+            else if (character == ']') squareDepth = Math.max(0, squareDepth - 1);
+            else if (character == '{') compoundDepth++;
+            else if (character == '}') compoundDepth = Math.max(0, compoundDepth - 1);
+            if (squareDepth == 0
+                    && compoundDepth == 0
+                    && command.startsWith(" run ", i)) return i;
+        }
+        return -1;
+    }
+
     static List<MacroArgumentRestorer.Replacement> findReplacements(
             ParserContext parser, MacroArgumentRestorer.CommandLine line) {
         String command = line.text();
@@ -200,19 +300,38 @@ final class CommandParseSupport {
             recordSelectorNameWarnings(command);
             ParseResults<CommandSourceStack> results =
                     parser.commands().getDispatcher().parse(command, parser.source());
+            ParsedCommand parsedCommand = new ParsedCommand(command, results, null);
             if (results.getReader().canRead()) {
-                // A masked interpolation is only a plausible stand-in, not necessarily a valid one,
-                // so a macro line that fails to parse is expected rather than a defect to report.
-                if (!line.macro()) {
-                    recordCommandFailure(
-                            "function_parse",
-                            command,
-                            new IllegalArgumentException(
-                                    "Command parser stopped at character "
-                                            + results.getReader().getCursor()));
-                    return List.of();
+                ParsedCommand normalized = normalizeLegacyNbtCommand(parser, command);
+                if (normalized != null) {
+                    parsedCommand = normalized;
+                    results = normalized.results();
+                } else {
+                    ParsedCommand nested = parseNestedCommand(parser, command);
+                    if (nested != null) {
+                        parsedCommand = nested;
+                        results = nested.results();
+                    } else {
+                        MacroArgumentRestorer.Replacement componentFallback =
+                                findMacroArgumentReplacement(line);
+                        if (componentFallback != null) return List.of(componentFallback);
+
+                        // A masked interpolation is only a plausible stand-in, not necessarily a valid
+                        // one, so a macro line that fails to parse is expected rather than a defect to
+                        // report.
+                        if (!line.macro()) {
+                            recordCommandFailure(
+                                    "function_parse",
+                                    command,
+                                    new IllegalArgumentException(
+                                            "Command parser stopped at character "
+                                                    + results.getReader().getCursor()));
+                            return List.of();
+                        }
+                    }
                 }
             }
+            if (!line.macro()) recordBareStorageStringWarning(line.source(), results.getContext());
             Map<String, MacroArgumentRestorer.Replacement> replacements = new LinkedHashMap<>();
 
             CommandContextBuilder<CommandSourceStack> context = results.getContext();
@@ -220,43 +339,37 @@ final class CommandParseSupport {
                 for (Map.Entry<String, ParsedArgument<CommandSourceStack, ?>> entry :
                         context.getArguments().entrySet()) {
                     ParsedArgument<CommandSourceStack, ?> argument = entry.getValue();
+                    int argumentStart =
+                            parsedCommand.sourceOffset(argument.getRange().getStart());
+                    int argumentEnd = parsedCommand.sourceOffset(argument.getRange().getEnd());
                     String rangeKey =
-                            argument.getRange().getStart()
+                            argumentStart
                                     + ":"
-                                    + argument.getRange().getEnd();
+                                    + argumentEnd;
                     if (replacements.containsKey(rangeKey)) continue;
 
-                    boolean masked =
-                            line.isMasked(
-                                    argument.getRange().getStart(), argument.getRange().getEnd());
-                    boolean unresolvedMask =
-                            masked
-                                    && line.hasUnresolvedMask(
-                                            argument.getRange().getStart(),
-                                            argument.getRange().getEnd());
-                    // An unresolved stand-in cannot safely be serialized into a structured
-                    // argument. A real caller value can: the replacement is processed normally
-                    // and restoreMacros below puts the corresponding $(name) back afterwards.
-                    if (unresolvedMask
-                            && !(argument.getResult() instanceof Component)) {
-                        continue;
-                    }
+                    // A masked value is still parsed by the ordinary Brigadier argument codec.
+                    // It may be an unresolved runtime value, but structured arguments such as NBT
+                    // lists can contain static component siblings that are safe to extract. The
+                    // source-to-parser ranges in CommandLine restore every mask afterwards.
 
                     String sourceArgument =
-                            line.sourceArgument(
-                                    argument.getRange().getStart(), argument.getRange().getEnd());
+                            line.translationArgument(argumentStart, argumentEnd);
 
                     try (var transaction = TranslationContext.beginTransaction()) {
                         int recordsBefore = TranslationContext.recordCount();
                         Set<String> catalogKeysBefore = TranslationContext.snapshot().keySet();
                         MacroArgumentRestorer.Replacement replacement =
-                                createReplacement(
+                                        createReplacement(
+                                        parsedCommand.text(),
                                         context,
                                         entry.getKey(),
                                         argument,
+                                        argumentStart,
+                                        argumentEnd,
                                         sourceArgument,
-                                        parser.registries(),
-                                        unresolvedMask);
+                                        line.materializedArgument(argumentStart, argumentEnd),
+                                        parser.registries());
                         if (replacement == null) {
                             if (TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
                                 transaction.commit();
@@ -277,70 +390,17 @@ final class CommandParseSupport {
             List<MacroArgumentRestorer.Replacement> ordered =
                     new ArrayList<>(replacements.values());
             ordered.sort(Comparator.comparingInt(MacroArgumentRestorer.Replacement::start).reversed());
-            if (ordered.isEmpty() && line.macro()) return findMacroJsonReplacements(line);
             return List.copyOf(ordered);
         } catch (RuntimeException exception) {
             if (!line.macro()) {
                 recordCommandFailure("function_command", command, exception);
                 return List.of();
             }
-            return findMacroJsonReplacements(line);
+            // A macro parse failure is expected when no caller binding makes the command concrete.
+            // Do not inspect the command as ad-hoc JSON: the caller graph/materializer is the only
+            // supported way to make a macro command ordinary and parseable.
+            return List.of();
         }
-    }
-
-    /**
-     * Best-effort extraction for macro commands whose command-specific codec rejects the masked
-     * value. Mojang's dispatcher has changed the inline dialog grammar several times; the JSON
-     * component itself is stable, so scan balanced JSON and transform that argument independently.
-     */
-    private static List<MacroArgumentRestorer.Replacement> findMacroJsonReplacements(
-            MacroArgumentRestorer.CommandLine line) {
-        String command = line.text();
-        for (int start = 0; start < command.length(); start++) {
-            char opening = command.charAt(start);
-            if (opening != '{' && opening != '[') continue;
-            int end = balancedJsonEnd(command, start, opening);
-            if (end < 0) continue;
-
-            String sourceArgument = line.sourceArgument(start, end);
-            if (!looksLikeComponentJson(sourceArgument)) continue;
-            String replacement = MacroCommandMaterializer.translateMaskedComponent(sourceArgument, null);
-            if (replacement == null) continue;
-            return List.of(new MacroArgumentRestorer.Replacement(start, end, replacement, true));
-        }
-        return List.of();
-    }
-
-    private static int balancedJsonEnd(String command, int start, char opening) {
-        char closing = opening == '{' ? '}' : ']';
-        char quote = 0;
-        boolean escaped = false;
-        int depth = 0;
-        for (int i = start; i < command.length(); i++) {
-            char c = command.charAt(i);
-            if (quote != 0) {
-                if (escaped) escaped = false;
-                else if (c == '\\') escaped = true;
-                else if (c == quote) quote = 0;
-                continue;
-            }
-            if (c == '"') {
-                quote = c;
-            } else if (c == opening) {
-                depth++;
-            } else if (c == closing && --depth == 0) {
-                return i + 1;
-            }
-        }
-        return -1;
-    }
-
-    private static boolean looksLikeComponentJson(String source) {
-        return source.contains("\"text\"")
-                || source.contains("\"translate\"")
-                || source.contains("\"contents\"")
-                || source.contains("\"title\"")
-                || source.contains("\"body\"");
     }
 
     static String applyReplacements(
@@ -361,11 +421,66 @@ final class CommandParseSupport {
 
     private static String maskMacrosForValidation(String value) {
         if (value == null || !value.contains("$(")) return value;
-        String masked =
-                value.replaceAll(
-                        "(\"(?:color|shadow_color)\"\\s*:\\s*\")\\$\\([^)]*\\)",
-                        "$1white");
-        return masked.replaceAll("\\$\\([^)]*\\)", "1");
+        // Do not use a regular expression here.  A macro can be either a quoted scalar (where a
+        // plain `1` is the legal stand-in) or a raw text-component element in `with` (where the
+        // stand-in must itself be a component object).  The small lexer below preserves escaped
+        // quotes and only recognizes a closing parenthesis belonging to the current marker.
+        StringBuilder masked = new StringBuilder(value.length());
+        char quote = 0;
+        boolean escaped = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (quote != 0) {
+                if (character == '$'
+                        && index + 2 < value.length()
+                        && value.charAt(index + 1) == '(') {
+                    int close = value.indexOf(')', index + 2);
+                    if (close >= 0) {
+                        masked.append('1');
+                        index = close;
+                        continue;
+                    }
+                }
+                masked.append(character);
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = 0;
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+                masked.append(character);
+                continue;
+            }
+            if (character != '$'
+                    || index + 2 >= value.length()
+                    || value.charAt(index + 1) != '(') {
+                masked.append(character);
+                continue;
+            }
+            int close = value.indexOf(')', index + 2);
+            if (close < 0) {
+                masked.append(character);
+                continue;
+            }
+            int previous = index - 1;
+            while (previous >= 0 && Character.isWhitespace(value.charAt(previous))) previous--;
+            int next = close + 1;
+            while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
+            boolean componentElement =
+                    previous >= 0
+                            && (value.charAt(previous) == '['
+                                    || value.charAt(previous) == ','
+                                    || value.charAt(previous) == ':')
+                            && next < value.length()
+                            && (value.charAt(next) == ']'
+                                    || value.charAt(next) == ','
+                                    || value.charAt(next) == '}');
+            if (componentElement) masked.append("{\"text\":\"1\"}");
+            else masked.append('1');
+            index = close;
+        }
+        return masked.toString();
     }
 
     static boolean parsesExecutableCommand(ParserContext parser, String command) {
@@ -398,6 +513,7 @@ final class CommandParseSupport {
             while (context.getChild() != null) context = context.getChild();
 
             if (!results.getReader().canRead() && context.getCommand() != null) return true;
+            if (isValidNestedExecute(parser, command)) return true;
 
             String reason =
                     results.getReader().canRead()
@@ -411,33 +527,196 @@ final class CommandParseSupport {
         return false;
     }
 
+    /** Validates the command after execute/run when the static source cannot satisfy its prefix. */
+    private static boolean isValidNestedExecute(ParserContext parser, String command) {
+        return parseNestedCommand(parser, command) != null;
+    }
+
+    /**
+     * Parses the command after an {@code execute ... run} prefix when the static command source
+     * cannot satisfy the prefix's entity-dependent conditions. Brigadier still validates the
+     * nested command, and the offset table lets its arguments be rewritten in the original line.
+     */
+    private static ParsedCommand parseNestedCommand(ParserContext parser, String command) {
+        int run = executeRunIndex(command);
+        if (run < 0) return null;
+        int nestedStart = run + " run ".length();
+        while (nestedStart < command.length()
+                && Character.isWhitespace(command.charAt(nestedStart))) nestedStart++;
+        if (nestedStart >= command.length()) return null;
+
+        String nested = command.substring(nestedStart);
+        try {
+            ParseResults<CommandSourceStack> results =
+                    parser.commands().getDispatcher().parse(nested, parser.source());
+            CommandContextBuilder<CommandSourceStack> context = results.getContext();
+            while (context.getChild() != null) context = context.getChild();
+            if (results.getReader().canRead() || context.getCommand() == null) return null;
+
+            List<Integer> offsets = new ArrayList<>(nested.length() + 1);
+            for (int i = 0; i <= nested.length(); i++) offsets.add(nestedStart + i);
+            return new ParsedCommand(nested, results, List.copyOf(offsets));
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Older SNBT readers reject JSON-style control escapes such as {@code \n} inside a quoted
+     * string, even though those spellings are common in text-component NBT written by datapacks.
+     * Retry only the parser input with those escapes decoded to their actual control characters.
+     * The source-offset table lets the resulting replacement still target the original command
+     * range when decoding shortened a two-character escape to one character.
+     */
+    private static ParsedCommand normalizeLegacyNbtCommand(
+            ParserContext parser, String command) {
+        NormalizedCommand normalized = normalizeLegacyNbtEscapes(command);
+        if (normalized == null) return null;
+
+        ParseResults<CommandSourceStack> results =
+                parser.commands().getDispatcher().parse(normalized.text(), parser.source());
+        if (results.getReader().canRead()) return null;
+        return new ParsedCommand(normalized.text(), results, normalized.sourceOffsets());
+    }
+
+    private static NormalizedCommand normalizeLegacyNbtEscapes(String command) {
+        StringBuilder normalized = new StringBuilder(command.length());
+        List<Integer> sourceOffsets = new ArrayList<>(command.length() + 1);
+        sourceOffsets.add(0);
+        char quote = 0;
+        boolean escaped = false;
+        boolean changed = false;
+
+        for (int sourceIndex = 0; sourceIndex < command.length(); ) {
+            char character = command.charAt(sourceIndex);
+            if (quote != 0) {
+                if (escaped) {
+                    normalized.append(character);
+                    sourceIndex++;
+                    sourceOffsets.add(sourceIndex);
+                    escaped = false;
+                    continue;
+                }
+
+                if (character == '\\' && sourceIndex + 1 < command.length()) {
+                    char escapedCharacter = command.charAt(sourceIndex + 1);
+                    char decoded = switch (escapedCharacter) {
+                        case 'n' -> '\n';
+                        case 'r' -> '\r';
+                        case 't' -> '\t';
+                        case 'b' -> '\b';
+                        case 'f' -> '\f';
+                        default -> 0;
+                    };
+                    if (decoded != 0) {
+                        normalized.append(decoded);
+                        sourceIndex += 2;
+                        sourceOffsets.add(sourceIndex);
+                        changed = true;
+                        continue;
+                    }
+
+                    normalized.append(character);
+                    sourceIndex++;
+                    sourceOffsets.add(sourceIndex);
+                    escaped = true;
+                    continue;
+                }
+
+                normalized.append(character);
+                sourceIndex++;
+                sourceOffsets.add(sourceIndex);
+                if (character == quote) quote = 0;
+                continue;
+            }
+
+            normalized.append(character);
+            sourceIndex++;
+            sourceOffsets.add(sourceIndex);
+            if (character == '\'' || character == '"') quote = character;
+        }
+
+        return changed
+                ? new NormalizedCommand(normalized.toString(), List.copyOf(sourceOffsets))
+                : null;
+    }
+
+    static boolean isSafeMacroComponentFallback(
+            MacroArgumentRestorer.CommandLine line,
+            List<MacroArgumentRestorer.Replacement> replacements) {
+        return line.macro()
+                && isJsonComponentCommand(line.source())
+                && replacements.stream()
+                .anyMatch(replacement -> replacement.value().contains("\"translate\""));
+    }
+
+    /** Validates the JSON component subtree after replacements have been rendered to source. */
+    static boolean isSafeGeneratedCommand(String command) {
+        JsonRange range = locateComponentJson(command);
+        if (range == null) return true;
+        return parseJsonWithBareComponentMacros(
+                        command.substring(range.start(), range.end()))
+                .isPresent();
+    }
+
     static void recordCommandFailure(String scope, String command, Throwable cause) {
         ExtractionDiagnostics diagnostics = COMMAND_DIAGNOSTICS.get();
-        if (diagnostics != null) diagnostics.record(scope, command, cause);
+        if (diagnostics != null) {
+            diagnostics.record(scope, FunctionHandler.diagnosticLocation(command), cause);
+        }
+    }
+
+    static void recordCommandWarning(String scope, String location, String message) {
+        ExtractionDiagnostics diagnostics = COMMAND_DIAGNOSTICS.get();
+        if (diagnostics != null) {
+            diagnostics.recordWarning(
+                    scope, FunctionHandler.diagnosticLocation(location), message);
+        }
     }
 
     private static MacroArgumentRestorer.Replacement createReplacement(
+            String command,
             CommandContextBuilder<CommandSourceStack> context,
             String argumentName,
             ParsedArgument<CommandSourceStack, ?> argument,
+            int replacementStart,
+            int replacementEnd,
             String sourceArgument,
-            HolderLookup.Provider registries,
-            boolean unresolvedMask) {
+            String materializedArgument,
+            HolderLookup.Provider registries) {
         Object value = argument.getResult();
         String replacement;
 
         switch (value) {
             case Component component -> {
-                if (unresolvedMask) {
-                    replacement =
-                            MacroCommandMaterializer.translateMaskedComponent(sourceArgument, component);
-                    if (replacement == null) return null;
+                Optional<JsonElement> sourceJson = parseJson(sourceArgument);
+                if (sourceJson.isPresent()) {
+                    JsonElement translated = TranslationUtils.translateLiteral(sourceJson.get());
+                    if (translated == sourceJson.get()) return null;
+                    replacement = translated.toString();
                 } else {
                     Component translated = TranslationUtils.translateLiteral(component);
                     if (translated == component) return null;
                     replacement = TranslationUtils.translateToJson(translated);
                 }
             }
+            //? if >=1.21.6 {
+            case Holder<?> holder when holder.value() instanceof Dialog dialog -> {
+                // Keep the already materialized source tree when it is JSON.  The Dialog codec has
+                // validated this tree, but its canonical encoder intentionally drops unknown fields
+                // such as datapack-defined `description`.  Those fields are still component-bearing
+                // text and must remain available to the schema-neutral translator.
+                var encoded = parseJson(materializedArgument).orElseGet(
+                        () ->
+                                Dialog.DIRECT_CODEC
+                                        .encodeStart(JsonOps.INSTANCE, dialog)
+                                        .getOrThrow(IllegalStateException::new));
+                var source = parseJson(sourceArgument).orElse(encoded);
+                var translated = TranslationUtils.translateDecodedTree(source);
+                if (translated == source) return null;
+                replacement = translated.toString();
+            }
+            //?}
             case ItemInput itemInput -> {
                 replacement =
                         StructuredCommandArgumentAdapter.translateItem(itemInput, registries)
@@ -450,28 +729,45 @@ final class CommandParseSupport {
                                 .orElse(null);
                 if (replacement == null) return null;
             }
-            case CompoundTag compound
-                    when "nbt".equals(argumentName) && containsCommandNode(context, "summon") -> {
+            case CompoundTag compound when containsCommandNode(context, "summon") -> {
                 CompoundTag translatedTag = compound.copy();
                 boolean temporaryId = !translatedTag.contains("id");
                 if (temporaryId) {
-                    findEntityId(context).ifPresent(id -> translatedTag.putString("id", id));
+                    findEntityId(context, command)
+                            .ifPresent(id -> translatedTag.putString("id", id));
                 }
                 EntityTagVisitor entityVisitor = new EntityTagVisitor();
                 translatedTag.accept(entityVisitor);
-                if (!entityVisitor.isChanged()) return null;
+                boolean changed = entityVisitor.isChanged();
+                // EntityTagVisitor knows the full entity schema.  The text-only pass is also
+                // needed for newer display entities whose arbitrary NBT text field is a component
+                // sequence rather than the single component shape used by older entities.
+                changed |= translateTextNbtFields(translatedTag);
+                if (!changed) return null;
                 if (temporaryId) translatedTag.remove("id");
                 replacement = translatedTag.toString();
             }
-            case StringTag stringTag -> {
+            case CompoundTag compound when isTextOnlyNbtArgument(context, argumentName) -> {
+                CompoundTag translatedTag = compound.copy();
+                if (!translateTextNbtFields(translatedTag)) return null;
+                replacement = translatedTag.toString();
+            }
+            // A bare SNBT string is not a text component by itself.  In particular, storage
+            // assignments commonly carry macro values such as `red`, identifiers, and counters;
+            // translating those strings into component objects makes a later `with storage` macro
+            // emit `{translate:...}` inside a quoted JSON scalar and the game rejects the command.
+            // Restrict the legacy scalar/list path to the one NBT field whose schema is known to be
+            // a text-display component.  Component arguments (tellraw/title/dialog, item lore,
+            // etc.) are decoded through the Component branch above and remain unaffected.
+            case StringTag stringTag when isTextNbtValueArgument(command, context) -> {
                 String translated = TranslationUtils.translateLiteral(stringTag.toString(), false);
                 if (translated.equals(stringTag.toString())) return null;
                 replacement = translated;
             }
-            case ListTag listTag -> {
+            case ListTag listTag when isTextNbtValueArgument(command, context) || isComponentList(listTag) -> {
                 ChangeTracker tracker = new ChangeTracker();
-                ListTag tag = listTag.copy();
-                for (int i = 0; i < listTag.size(); i++) {
+                ListTag tag = sourceList(sourceArgument, listTag);
+                for (int i = 0; i < tag.size(); i++) {
                     tracker.add(TranslationUtils.translateNbtComponent(tag, i, "list." + i));
                 }
                 if (!tracker.isChanged()) return null;
@@ -483,8 +779,288 @@ final class CommandParseSupport {
         }
 
         return new MacroArgumentRestorer.Replacement(
-                argument.getRange().getStart(), argument.getRange().getEnd(), replacement, false);
+                replacementStart, replacementEnd, replacement);
     }
+
+    private static ListTag sourceList(String sourceArgument, ListTag fallback) {
+        if (sourceArgument == null || sourceArgument.isBlank()) return fallback.copy();
+        try {
+            //? if >=1.21.5 {
+            Tag parsed = TagParser.create(NbtOps.INSTANCE).parseFully(sourceArgument);
+            //?} else {
+            /*Tag parsed = fallback.copy();
+            *///?}
+            return parsed instanceof ListTag list ? list : fallback.copy();
+        } catch (Exception ignored) {
+            return fallback.copy();
+        }
+    }
+
+    /**
+     * Translates only fields literally named {@code text} in command NBT payloads.
+     *
+     * <p>Function arguments and {@code data merge entity} payloads are open schemas.  Guessing
+     * that every string in them is visible text would turn values such as {@code money:125} or
+     * {@code color:red} into translation entries.  A field named {@code text} is the one useful
+     * piece of provenance available without knowing where the called function will consume the
+     * payload, so the traversal deliberately stays that narrow while still following nested
+     * compounds and lists.
+     */
+    private static boolean translateTextNbtFields(CompoundTag root) {
+        return translateTextNbtFields(root, "");
+    }
+
+    private static boolean translateTextNbtFields(CompoundTag compound, String path) {
+        boolean changed = false;
+        for (String name : new ArrayList<>(NbtUtils.getKeys(compound))) {
+            Tag child = compound.get(name);
+            if (child == null) continue;
+
+            String keyPath = path.isBlank() ? name : path + "." + name;
+            if ("text".equals(name)) {
+                changed |= TranslationUtils.translateNbtComponent(compound, name, keyPath);
+                child = compound.get(name);
+                if (child == null) continue;
+            }
+            changed |= translateTextNbtChildren(child, keyPath);
+        }
+        return changed;
+    }
+
+    private static boolean translateTextNbtChildren(Tag tag, String path) {
+        if (tag instanceof CompoundTag compound) {
+            return translateTextNbtFields(compound, path);
+        }
+        if (!(tag instanceof ListTag list)) return false;
+
+        boolean changed = false;
+        for (int i = 0; i < list.size(); i++) {
+            Tag child = list.get(i);
+            if (child instanceof CompoundTag compound) {
+                changed |= translateTextNbtFields(compound, path + "." + i);
+            } else if (child instanceof ListTag nested) {
+                changed |= translateTextNbtChildren(nested, path + "." + i);
+            }
+        }
+        return changed;
+    }
+
+    private static boolean isTextOnlyNbtArgument(
+            CommandContextBuilder<CommandSourceStack> context, String argumentName) {
+        // The guard is intentionally command-shape based rather than a generic CompoundTag rule:
+        // item/block/entity payloads have richer schema visitors and must not enter this heuristic.
+        if (containsCommandNode(context, "data")) {
+            return containsCommandNode(context, "merge") && containsCommandNode(context, "entity");
+        }
+        return containsCommandNode(context, "function");
+    }
+
+    /**
+     * Extracts a component-bearing JSON argument when a macro placeholder makes Brigadier stop
+     * before the end of an otherwise balanced command.  Caller materialization remains the first
+     * path; this fallback is only for unresolved macros whose internal parser stand-in is not a
+     * legal value for the command argument (for example {@code color=$(event_color)}).
+     *
+     * <p>The source and masked ranges are both derived from {@link MacroArgumentRestorer.CommandLine}
+     * and the replacement is rendered through the same range mapper as ordinary arguments.  This
+     * keeps equal macro names in separate fields from affecting one another and avoids global text
+     * replacement.
+     */
+    private static MacroArgumentRestorer.Replacement findMacroArgumentReplacement(
+            MacroArgumentRestorer.CommandLine line) {
+        if (!isJsonComponentCommand(line.source())) return null;
+        JsonRange materialized = locateComponentJson(line.text());
+        if (materialized == null) return null;
+
+        Optional<JsonElement> materializedJson =
+                parseJson(line.text().substring(materialized.start(), materialized.end()));
+        Optional<JsonElement> sourceJson =
+                parseJson(line.translationArgument(materialized.start(), materialized.end()));
+        if (materializedJson.isEmpty() || sourceJson.isEmpty()) return null;
+
+        try (var transaction = TranslationContext.beginTransaction()) {
+            // Parsing the materialized value verifies that the candidate is balanced JSON. The
+            // source tree deliberately keeps unresolved macros so text fields can become `with`
+            // arguments instead of leaking the internal stand-in into the language catalog.
+            JsonElement translated = looksLikeDialogSchema(sourceJson.get())
+                    ? TranslationUtils.translateDecodedTree(sourceJson.get())
+                    : TranslationUtils.translateLiteral(sourceJson.get());
+            if (translated == sourceJson.get()) return null;
+            transaction.commit();
+            return new MacroArgumentRestorer.Replacement(
+                    materialized.start(), materialized.end(), translated.toString());
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static boolean looksLikeDialogSchema(JsonElement json) {
+        if (json == null || !json.isJsonObject()) return false;
+        JsonObject object = json.getAsJsonObject();
+        return object.has("type")
+                && object.get("type").isJsonPrimitive()
+                && object.get("type").getAsJsonPrimitive().isString()
+                && object.get("type").getAsString().contains(":");
+    }
+
+    private static boolean isJsonComponentCommand(String source) {
+        String command = source == null ? "" : source.trim();
+        if (command.startsWith("$")) command = command.substring(1);
+        return command.contains(" dialog show ")
+                || command.startsWith("dialog show ")
+                || command.contains(" title ")
+                || command.contains(" subtitle ")
+                || command.contains(" actionbar ")
+                || command.contains(" tellraw ")
+                || command.startsWith("tellraw ");
+    }
+
+    /**
+     * Locates the JSON argument of a component command when unresolved macros prevent Brigadier
+     * from producing an argument range. This is intentionally a narrow lexer fallback: all normal
+     * commands, and all commands whose macros have known caller values, use Brigadier ranges.
+     */
+    private static JsonRange locateComponentJson(String command) {
+        if (command == null || command.isBlank()) return null;
+        int start = -1;
+        for (String keyword : List.of("dialog show", " title ", " subtitle ", " actionbar ", " tellraw ", "tellraw ")) {
+            int found = command.indexOf(keyword);
+            if (found < 0) continue;
+            int candidate = found + keyword.length();
+            int json = findNextJson(command, candidate);
+            if (json >= 0 && (start < 0 || json < start)) start = json;
+        }
+        if (start < 0) return null;
+        int end = balancedJsonEnd(command, start);
+        if (end < 0) return null;
+        return new JsonRange(start, end);
+    }
+
+    private static Optional<JsonElement> parseJson(String value) {
+        if (value == null || value.isBlank()) return Optional.empty();
+        try {
+            return Optional.of(JsonParser.parseString(value));
+        } catch (JsonParseException | IllegalStateException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    /** Parses generated component JSON while treating an unquoted macro as one component value. */
+    private static Optional<JsonElement> parseJsonWithBareComponentMacros(String value) {
+        Optional<JsonElement> direct = parseJson(value);
+        if (direct.isPresent()) return direct;
+        String normalized = replaceBareComponentMacros(value);
+        return normalized.equals(value) ? Optional.empty() : parseJson(normalized);
+    }
+
+    private static String replaceBareComponentMacros(String value) {
+        StringBuilder result = new StringBuilder(value.length());
+        char quote = 0;
+        boolean escaped = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (quote != 0) {
+                result.append(character);
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = 0;
+                continue;
+            }
+            if (character == '\"' || character == '\'') {
+                quote = character;
+                result.append(character);
+                continue;
+            }
+            if (character != '$' || index + 2 >= value.length() || value.charAt(index + 1) != '(') {
+                result.append(character);
+                continue;
+            }
+            int close = value.indexOf(')', index + 2);
+            if (close < 0) {
+                result.append(character);
+                continue;
+            }
+            int previous = index - 1;
+            while (previous >= 0 && Character.isWhitespace(value.charAt(previous))) previous--;
+            int next = close + 1;
+            while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
+            boolean elementBoundary =
+                    previous >= 0
+                            && (value.charAt(previous) == '['
+                                    || value.charAt(previous) == ','
+                                    || value.charAt(previous) == ':')
+                            && next < value.length()
+                            && (value.charAt(next) == ']'
+                                    || value.charAt(next) == ','
+                                    || value.charAt(next) == '}');
+            if (!elementBoundary) {
+                result.append(value, index, close + 1);
+                index = close;
+                continue;
+            }
+            String macro = value.substring(index, close + 1);
+            result.append("{\"text\":\"").append(macro).append("\"}");
+            index = close;
+        }
+        return result.toString();
+    }
+
+    private static int findNextJson(String command, int start) {
+        char quote = 0;
+        boolean escaped = false;
+        for (int i = start; i < command.length(); i++) {
+            char character = command.charAt(i);
+            if (quote != 0) {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = 0;
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+            } else if (character == '{' || character == '[') {
+                // A tellraw/dialog target may itself contain a selector such as
+                // @a[distance=..8]. Try each balanced candidate instead of assuming that the
+                // first square bracket is the JSON component array.
+                int end = balancedJsonEnd(command, i);
+                if (end > i
+                        && parseJsonWithBareComponentMacros(command.substring(i, end)).isPresent()) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    private static int balancedJsonEnd(String command, int start) {
+        int curly = 0;
+        int square = 0;
+        char quote = 0;
+        boolean escaped = false;
+        for (int i = start; i < command.length(); i++) {
+            char character = command.charAt(i);
+            if (quote != 0) {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = 0;
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+            } else if (character == '{') {
+                curly++;
+            } else if (character == '}') {
+                if (--curly == 0 && square == 0) return i + 1;
+            } else if (character == '[') {
+                square++;
+            } else if (character == ']') {
+                if (--square == 0 && curly == 0) return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    private record JsonRange(int start, int end) {}
 
     private static boolean containsCommandNode(
             CommandContextBuilder<CommandSourceStack> context, String name) {
@@ -497,14 +1073,50 @@ final class CommandParseSupport {
         return false;
     }
 
+    private static boolean isTextNbtValueArgument(
+            String command, CommandContextBuilder<CommandSourceStack> context) {
+        if (!containsCommandNode(context, "data")
+                || !containsCommandNode(context, "modify")
+                || !containsCommandNode(context, "entity")) {
+            return false;
+        }
+        ParsedArgument<CommandSourceStack, ?> path = findArgument(context, "path", "targetPath");
+        if (path == null) return false;
+        String value = argumentText(command, path).trim();
+        while ((value.startsWith("\"") && value.endsWith("\""))
+                || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.substring(1, value.length() - 1).trim();
+        }
+        // Text-display entities use the `text` component field.  Do not infer visibility from a
+        // generic string/list in storage or an arbitrary entity path.
+        int lastSegment = value.lastIndexOf('.') + 1;
+        String segment = value.substring(lastSegment);
+        int index = segment.indexOf('[');
+        if (index >= 0) segment = segment.substring(0, index);
+        return "text".equals(segment);
+    }
+
+    private static boolean isComponentList(ListTag list) {
+        if (list == null || list.isEmpty()) return false;
+        for (Tag child : list) {
+            if (!(child instanceof CompoundTag compound)) return false;
+            boolean component =
+                    NbtUtils.getKeys(compound).stream()
+                            .anyMatch(TEXT_COMPONENTS::contains);
+            if (!component) return false;
+        }
+        return true;
+    }
+
     private static java.util.Optional<String> findEntityId(
-            CommandContextBuilder<CommandSourceStack> context) {
-        ParsedArgument<CommandSourceStack, ?> entityArgument =
-                context.getArguments().get("entity");
-        if (entityArgument == null || !(entityArgument.getResult() instanceof Holder<?> holder)) {
+            CommandContextBuilder<CommandSourceStack> context, String command) {
+        ParsedArgument<CommandSourceStack, ?> entityArgument = findArgument(context, "entity");
+        if (entityArgument == null || command == null || command.isBlank()) {
             return java.util.Optional.empty();
         }
-        return holder.unwrapKey().map(ResourceIds::key);
+        String id = argumentText(command, entityArgument).trim();
+        if (id.isBlank()) return java.util.Optional.empty();
+        return java.util.Optional.of(id.indexOf(':') >= 0 ? id : "minecraft:" + id);
     }
 
     private static String argumentText(
@@ -690,6 +1302,19 @@ final class CommandParseSupport {
 
     record ParserContext(
             Commands commands, CommandSourceStack source, HolderLookup.Provider registries) {}
+
+    private record ParsedCommand(
+            String text,
+            ParseResults<CommandSourceStack> results,
+            List<Integer> sourceOffsets) {
+        int sourceOffset(int parserOffset) {
+            if (sourceOffsets == null) return parserOffset;
+            if (parserOffset < 0 || parserOffset >= sourceOffsets.size()) return parserOffset;
+            return sourceOffsets.get(parserOffset);
+        }
+    }
+
+    private record NormalizedCommand(String text, List<Integer> sourceOffsets) {}
 
     private static final class ChangeTracker {
         private boolean changed;

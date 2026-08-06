@@ -8,6 +8,7 @@ import java.util.List;
 import me.fengming.wtem.common.Wtem;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.WorldStem;
+import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.repository.PackSource;
 
 /** Values the extraction configuration screen can present as explicit selection toggles.
@@ -34,8 +35,8 @@ public record ExtractionChoices(
         List<String> packs =
                 worldStem.resourceManager().listPacks()
                         .filter(pack -> pack.location().source() == PackSource.WORLD)
-                        .map(pack -> pack.packId())
-                        .filter(packId -> !packId.matches(".*_[0-9a-f]{8}_wtem"))
+                        .map(PackResources::packId)
+                        .filter(packId -> !isGeneratedCompanionPack(packId))
                         .toList();
         List<String> entityTypes =
                 BuiltInRegistries.ENTITY_TYPE.keySet().stream()
@@ -49,7 +50,7 @@ public record ExtractionChoices(
                 packs, entityTypes, blockEntityTypes, savedDataFiles(worldRoot.resolve("data")));
     }
 
-    private static List<String> savedDataFiles(Path dataDirectory) {
+    static List<String> savedDataFiles(Path dataDirectory) {
         if (!Files.isDirectory(dataDirectory)) return List.of();
         try (var paths = Files.walk(dataDirectory)) {
             return paths.filter(Files::isRegularFile)
@@ -65,6 +66,8 @@ public record ExtractionChoices(
                                             .relativize(path)
                                             .toString()
                                             .replace('\\', '/'))
+                    .filter(path -> !VanillaSavedDataFiles.isVanilla(path))
+                    .sorted()
                     .toList();
         } catch (IOException exception) {
             Wtem.LOGGER.warn("Failed to discover saved-data files in {}", dataDirectory, exception);
@@ -79,5 +82,17 @@ public record ExtractionChoices(
                 .distinct()
                 .sorted(Comparator.naturalOrder())
                 .toList();
+    }
+
+    private static boolean isGeneratedCompanionPack(String packId) {
+        if (packId == null || !packId.endsWith("_wtem")) return false;
+        int marker = packId.length() - 14;
+        if (marker < 0 || packId.charAt(marker) != '_') return false;
+        for (int index = marker + 1; index < marker + 9; index++) {
+            char character = packId.charAt(index);
+            if (!((character >= '0' && character <= '9')
+                    || (character >= 'a' && character <= 'f'))) return false;
+        }
+        return packId.charAt(marker + 9) == '_';
     }
 }

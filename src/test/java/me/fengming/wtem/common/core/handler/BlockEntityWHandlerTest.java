@@ -157,6 +157,26 @@ class BlockEntityWHandlerTest {
     }
 
     @Test
+    void visitsItemsStoredByTheModernShelfBlockEntity() {
+        CompoundTag shelf = nbt("""
+                {"id":"minecraft:shelf","x":12,"y":64,"z":-4,"Items":[
+                  {"id":"minecraft:stick","Slot":0b,"components":{
+                    "minecraft:custom_name":"{\\"text\\":\\"Shelf item one\\"}"}},
+                  {"id":"minecraft:paper","Slot":1b,"components":{
+                    "minecraft:item_name":"{\\"text\\":\\"Shelf item two\\"}"}}
+                ]}
+                """);
+
+        assertTrue(new BlockEntityWHandler().handle(shelf));
+
+        assertEquals(
+                Map.of(
+                        "item.stick.1.name", "Shelf item one",
+                        "item.paper.1.item_name", "Shelf item two"),
+                TranslationContext.snapshot());
+    }
+
+    @Test
     void visitsTheSingleItemFieldOfEachSpecialBlockEntity() {
         Map<String, String> fixtures =
                 Map.of(

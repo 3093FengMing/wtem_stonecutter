@@ -1,18 +1,21 @@
 package me.fengming.wtem.common.core.handler.datapack.command;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.google.gson.JsonPrimitive;
+import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
-import net.minecraft.network.chat.Component;
+import me.fengming.wtem.common.util.NbtUtils;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.Tag;
+import net.minecraft.nbt.TagParser;
 
 /**
  * Materializes known caller bindings before ordinary command extraction and validates the restored
@@ -23,6 +26,7 @@ import net.minecraft.network.chat.Component;
 final class MacroCommandMaterializer {
     private static final ThreadLocal<MacroCallGraph> MACRO_CALL_GRAPH = new ThreadLocal<>();
     private static final ThreadLocal<String> CURRENT_FUNCTION_ID = new ThreadLocal<>();
+    private static final Set<String> TEXT_COMPONENTS = Set.of("text", "translate", "score", "selector", "nbt", "keybind", "object");
 
     private MacroCommandMaterializer() {}
 
@@ -55,9 +59,10 @@ final class MacroCommandMaterializer {
 
     /**
      * Materializes one command per caller binding, parses it through the ordinary command path, then
-     * writes the extracted structure back onto the original source ranges. The written line therefore
-     * keeps every {@code $(name)}, while validation re-applies the same caller binding to prove that
-     * the restored command remains executable.
+     * writes the extracted structure back onto the original source ranges. Macros in text
+     * components remain as {@code with} arguments; non-text macros are written as their concrete
+     * caller values. Validation re-applies the same caller binding to prove that the generated line
+     * remains executable.
      */
     static CommandExtraction extract(
             CommandParseSupport.ParserContext parser,
@@ -65,13 +70,56 @@ final class MacroCommandMaterializer {
         List<Map<String, String>> bindings = callChainBindings(sourceLine);
         if (bindings.isEmpty()) return extractFallback(parser, sourceLine);
 
+        // A component-valued storage macro must be emitted as a raw with argument.  Keeping it
+        // inside {"text":"$(name)"} would make Minecraft substitute the SNBT object into a
+        // quoted scalar and fail before the dialog/title command is parsed.  Require the value to
+        // be a component for every statically known caller so one shared output remains valid for
+        // the whole call graph.
+        Set<String> structuredComponentMacros =
+                structuredComponentMacros(bindings, macroNames(sourceLine.source()));
+
         String rendered = null;
+        boolean unsafeBindingSeen = false;
         List<Map<String, String>> parsedBindings = new ArrayList<>();
         List<String> lineMacros = macroNames(sourceLine.source());
         for (Map<String, String> binding : bindings) {
             MacroArgumentRestorer.CommandLine materialized =
                     MacroArgumentRestorer.CommandLine.of(sourceLine.source(), binding);
+            String unsafeMacro = materialized.unsafeResolvedMacro(structuredComponentMacros);
+            if (unsafeMacro != null) {
+                unsafeBindingSeen = true;
+                CommandParseSupport.recordCommandWarning(
+                        "function_macro_binding",
+                        sourceLine.source(),
+                        "Caller value for $(%s) is not safe in this command; the original command was kept"
+                                .formatted(unsafeMacro));
+                continue;
+            }
             if (!CommandParseSupport.parsesExecutableCommand(parser, materialized.text())) {
+                if (rendered == null) {
+                    try (var bindingTransaction = TranslationContext.beginTransaction()) {
+                        List<MacroArgumentRestorer.Replacement> replacements =
+                                CommandParseSupport.findReplacements(parser, materialized);
+                        replacements =
+                                rewriteStructuredMacroArguments(
+                                        replacements, structuredComponentMacros);
+                        if (!replacements.isEmpty()
+                                && CommandParseSupport.isSafeMacroComponentFallback(
+                                materialized, replacements)) {
+                            String candidate = materialized.render(replacements);
+                            if (CommandParseSupport.isSafeGeneratedCommand(candidate)) {
+                                rendered = candidate;
+                                bindingTransaction.commit();
+                            } else {
+                                CommandParseSupport.recordCommandWarning(
+                                        "function_component_rewrite",
+                                        sourceLine.source(),
+                                        "Generated component JSON could not be parsed; the original command was kept");
+                            }
+                        }
+                    }
+                }
+                if (rendered != null) continue;
                 if (binding.keySet().containsAll(lineMacros)) {
                     CommandParseSupport.recordCommandFailure(
                             "function_macro_binding",
@@ -91,6 +139,8 @@ final class MacroCommandMaterializer {
                 int recordsBefore = TranslationContext.recordCount();
                 List<MacroArgumentRestorer.Replacement> replacements =
                         CommandParseSupport.findReplacements(parser, materialized);
+                replacements =
+                        rewriteStructuredMacroArguments(replacements, structuredComponentMacros);
                 if (replacements.isEmpty()) {
                     if (TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
                         bindingTransaction.commit();
@@ -99,6 +149,13 @@ final class MacroCommandMaterializer {
                 }
 
                 String candidate = materialized.render(replacements);
+                if (!CommandParseSupport.isSafeGeneratedCommand(candidate)) {
+                    CommandParseSupport.recordCommandWarning(
+                            "function_component_rewrite",
+                            sourceLine.source(),
+                            "Generated component JSON could not be parsed; the original command was kept");
+                    continue;
+                }
                 if (!CommandParseSupport.parsesExecutableCommand(
                         parser,
                         MacroArgumentRestorer.CommandLine.of(candidate, binding).text())) {
@@ -114,6 +171,11 @@ final class MacroCommandMaterializer {
             }
         }
 
+        // An unsafe caller cannot be represented by the rendered source, even when another caller
+        // supplied a parseable value. Do not silently choose a partial translation for only the
+        // safe callers: the original macro command is the only lossless output for this case.
+        if (unsafeBindingSeen) return CommandExtraction.unchanged(sourceLine.source());
+
         if (rendered == null) {
             return parsedBindings.isEmpty()
                     ? extractFallback(parser, sourceLine)
@@ -121,16 +183,149 @@ final class MacroCommandMaterializer {
         }
 
         // A replacement derived from one caller must still be valid for every other caller whose
-        // arguments Brigadier could resolve. This catches a serializer accidentally baking a
-        // concrete macro value into the output instead of restoring $(name).
+        // arguments Brigadier could resolve. This catches a serializer producing a malformed
+        // component while resolving a non-text macro.
         for (Map<String, String> binding : parsedBindings) {
-            String rebound =
-                    MacroArgumentRestorer.CommandLine.of(rendered, binding).text();
+            MacroArgumentRestorer.CommandLine reboundLine =
+                    MacroArgumentRestorer.CommandLine.of(rendered, binding);
+            if (reboundLine.unsafeResolvedMacro(structuredComponentMacros) != null
+                    || !CommandParseSupport.isSafeGeneratedCommand(reboundLine.text())) {
+                return CommandExtraction.unchanged(sourceLine.source());
+            }
+            String rebound = reboundLine.text();
             if (!CommandParseSupport.isValidCommand(parser, rebound)) {
                 return CommandExtraction.unchanged(sourceLine.source());
             }
         }
         return CommandExtraction.changed(rendered);
+    }
+
+    private static Set<String> structuredComponentMacros(
+            List<Map<String, String>> bindings, List<String> names) {
+        Set<String> result = new HashSet<>(names);
+        for (String name : names) {
+            for (Map<String, String> binding : bindings) {
+                String value = binding.get(name);
+                if (!looksLikeComponentValue(value)) {
+                    result.remove(name);
+                    break;
+                }
+            }
+        }
+        return Set.copyOf(result);
+    }
+
+    /** Recognizes the component discriminators in the SNBT spelling stored by the call graph. */
+    private static boolean looksLikeComponentValue(String value) {
+        if (value == null || value.isBlank()) return false;
+        try {
+            Tag parsed = parseTag(value);
+            return isComponentTag(parsed);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static boolean isComponentTag(Tag tag) {
+        if (tag instanceof CompoundTag compound) {
+            return NbtUtils.getKeys(compound).stream()
+                    .anyMatch(TEXT_COMPONENTS::contains);
+        }
+        if (tag instanceof ListTag list && !list.isEmpty()) {
+            for (Tag child : list) {
+                if (!isComponentTag(child)) return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static Tag parseTag(String value) throws Exception {
+        //? if >=1.21.5 {
+        return TagParser.create(NbtOps.INSTANCE).parseFully(value);
+        //?} else {
+        /*return TagParser.parseTag(value);
+        *///?}
+    }
+
+    private static List<MacroArgumentRestorer.Replacement> rewriteStructuredMacroArguments(
+            List<MacroArgumentRestorer.Replacement> replacements,
+            Set<String> structuredComponentMacros) {
+        if (replacements.isEmpty() || structuredComponentMacros.isEmpty()) return replacements;
+        List<MacroArgumentRestorer.Replacement> result = new ArrayList<>(replacements.size());
+        for (MacroArgumentRestorer.Replacement replacement : replacements) {
+            String value = replacement.value();
+            try {
+                JsonElement json = JsonParser.parseString(value);
+                Map<String, String> sentinels = new LinkedHashMap<>();
+                JsonElement rewritten =
+                        replaceComponentMacroArguments(json, structuredComponentMacros, sentinels);
+                if (sentinels.isEmpty()) {
+                    result.add(replacement);
+                    continue;
+                }
+                String serialized = rewritten.toString();
+                for (Map.Entry<String, String> entry : sentinels.entrySet()) {
+                    serialized =
+                            serialized.replace(
+                                    "\"" + entry.getKey() + "\"", "$(" + entry.getValue() + ")");
+                }
+                result.add(
+                        new MacroArgumentRestorer.Replacement(
+                                replacement.start(), replacement.end(), serialized));
+            } catch (RuntimeException ignored) {
+                // Non-JSON replacements (SNBT arguments handled by another visitor) are left to
+                // the ordinary restoration path.
+                result.add(replacement);
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private static JsonElement replaceComponentMacroArguments(
+            JsonElement element,
+            Set<String> structuredComponentMacros,
+            Map<String, String> sentinels) {
+        if (element == null || element.isJsonNull()) return element;
+        if (element.isJsonArray()) {
+            var result = new com.google.gson.JsonArray();
+            element.getAsJsonArray()
+                    .forEach(
+                            child ->
+                                    result.add(
+                                            replaceComponentMacroArguments(
+                                                    child, structuredComponentMacros, sentinels)));
+            return result;
+        }
+        if (!element.isJsonObject()) return element.deepCopy();
+
+        JsonObject object = element.getAsJsonObject();
+        if (object.size() == 1
+                && object.has("text")
+                && object.get("text").isJsonPrimitive()
+                && object.get("text").getAsJsonPrimitive().isString()) {
+            String text = object.get("text").getAsString();
+            if (text.startsWith("$(") && text.endsWith(")")) {
+                String name = text.substring(2, text.length() - 1);
+                if (structuredComponentMacros.contains(name)) {
+                    String sentinel = "__wtem_component_macro_" + sentinels.size() + "__";
+                    sentinels.put(sentinel, name);
+                    return new com.google.gson.JsonPrimitive(sentinel);
+                }
+            }
+        }
+
+        JsonObject result = new JsonObject();
+        object.entrySet()
+                .forEach(
+                        entry ->
+                                result.add(
+                                        entry.getKey(),
+                                        replaceComponentMacroArguments(
+                                                entry.getValue(),
+                                                structuredComponentMacros,
+                                                sentinels)));
+        return result;
     }
 
     private static List<Map<String, String>> callChainBindings(
@@ -153,20 +348,36 @@ final class MacroCommandMaterializer {
         return List.copyOf(result);
     }
 
-    /** Retains the conservative JSON fallback for functions whose runtime arguments are unknown. */
     private static CommandExtraction extractFallback(
             CommandParseSupport.ParserContext parser,
             MacroArgumentRestorer.CommandLine line) {
         List<MacroArgumentRestorer.Replacement> replacements =
                 CommandParseSupport.findReplacements(parser, line);
         if (replacements.isEmpty()) return CommandExtraction.unchanged(line.source());
-        boolean fallbackJson = replacements.stream().anyMatch(MacroArgumentRestorer.Replacement::fallbackJson);
-        if (!fallbackJson
-                && !CommandParseSupport.isValidCommand(
-                        parser, CommandParseSupport.applyReplacements(line.text(), replacements))) {
+        if (CommandParseSupport.isSafeMacroComponentFallback(line, replacements)) {
+            String candidate = line.render(replacements);
+            if (!CommandParseSupport.isSafeGeneratedCommand(candidate)) {
+                CommandParseSupport.recordCommandWarning(
+                        "function_component_rewrite",
+                        line.source(),
+                        "Generated component JSON could not be parsed; the original command was kept");
+                return CommandExtraction.unchanged(line.source());
+            }
+            return CommandExtraction.changed(candidate);
+        }
+        if (!CommandParseSupport.isValidCommand(
+                parser, CommandParseSupport.applyReplacements(line.text(), replacements))) {
             return CommandExtraction.unchanged(line.source());
         }
-        return CommandExtraction.changed(line.render(replacements));
+        String candidate = line.render(replacements);
+        if (!CommandParseSupport.isSafeGeneratedCommand(candidate)) {
+            CommandParseSupport.recordCommandWarning(
+                    "function_component_rewrite",
+                    line.source(),
+                    "Generated component JSON could not be parsed; the original command was kept");
+            return CommandExtraction.unchanged(line.source());
+        }
+        return CommandExtraction.changed(candidate);
     }
 
     static List<String> macroNames(String source) {
@@ -182,186 +393,4 @@ final class MacroCommandMaterializer {
         return names;
     }
 
-    /**
-     * Transforms a component argument that was parsed through macro stand-ins. Brigadier only gives
-     * us the stand-in component (for example {@code "1"} where {@code $(reqwait)} was), so
-     * translating that value would either lose the macro or create a catalogue entry for the
-     * meaningless number. Re-read the source JSON and translate literal siblings in place instead.
-     */
-    static String translateMaskedComponent(String sourceArgument, Component parsed) {
-        String trimmed = sourceArgument == null ? "" : sourceArgument.trim();
-        if (trimmed.isEmpty()) return null;
-
-        char wrapper = 0;
-        String jsonSource = trimmed;
-        if (trimmed.length() >= 2
-                && ((trimmed.charAt(0) == '\'' && trimmed.charAt(trimmed.length() - 1) == '\'')
-                        || (trimmed.charAt(0) == '"'
-                                && trimmed.charAt(trimmed.length() - 1) == '"'))) {
-            wrapper = trimmed.charAt(0);
-            jsonSource = trimmed.substring(1, trimmed.length() - 1);
-            if (wrapper == '"') {
-                try {
-                    // A double-quoted component is a JSON string containing JSON. Decode its
-                    // escapes before handing the inner value to Gson.
-                    jsonSource = JsonParser.parseString(trimmed).getAsString();
-                } catch (RuntimeException ignored) {
-                    return null;
-                }
-            }
-        }
-
-        JsonElement json;
-        try {
-            json = JsonParser.parseString(jsonSource);
-        } catch (RuntimeException ignored) {
-            return null;
-        }
-
-        MacroTransform transformed = transformMacroComponent(json, sourceArgument);
-        if (!transformed.changed()) return null;
-
-        String serialized = transformed.value().toString();
-        if (wrapper == '\'') return "'" + serialized + "'";
-        if (wrapper == '"') return new JsonPrimitive(serialized).toString();
-        return serialized;
-    }
-
-    private static MacroTransform transformMacroComponent(
-            JsonElement value, String warningResource) {
-        if (value == null || value.isJsonNull()) return MacroTransform.unchanged(value);
-
-        if (value.isJsonPrimitive()) {
-            JsonPrimitive primitive = value.getAsJsonPrimitive();
-            if (!primitive.isString()) return MacroTransform.unchanged(value);
-            String literal = primitive.getAsString();
-            String macro = exactMacro(literal);
-            if (macro != null) {
-                recordMacroWarning(macro, warningResource);
-                JsonObject translated = new JsonObject();
-                translated.addProperty("translate", literal);
-                return MacroTransform.changed(translated);
-            }
-            if (literal.isBlank() || literal.contains("$(")) {
-                return MacroTransform.unchanged(value);
-            }
-            JsonObject translated = new JsonObject();
-            translated.addProperty("translate", TranslationContext.addEntry(literal));
-            return MacroTransform.changed(translated);
-        }
-
-        if (value.isJsonArray()) {
-            JsonArray array = value.getAsJsonArray();
-            boolean changed = false;
-            for (int i = 0; i < array.size(); i++) {
-                MacroTransform child = transformMacroComponent(array.get(i), warningResource);
-                if (!child.changed()) continue;
-                array.set(i, child.value());
-                changed = true;
-            }
-            return new MacroTransform(array, changed);
-        }
-
-        JsonObject object = value.getAsJsonObject();
-        boolean changed = false;
-        JsonElement text = object.get("text");
-        if (text != null && text.isJsonPrimitive() && text.getAsJsonPrimitive().isString()) {
-            String literal = text.getAsString();
-            String macro = exactMacro(literal);
-            if (macro != null) {
-                // A runtime macro used as text is a translation key, not a literal component. It
-                // must remain $(name) so Minecraft's macro expansion can provide the key later.
-                object.remove("text");
-                object.addProperty("translate", literal);
-                recordMacroWarning(macro, warningResource);
-                changed = true;
-            } else if (!literal.isBlank() && !literal.contains("$(")) {
-                object.remove("text");
-                object.addProperty("translate", TranslationContext.addEntry(literal));
-                changed = true;
-            }
-        }
-
-        // Components can nest through contents, extra, hover/click events, and the dialog body
-        // schema. Traversing every object value is intentional: fields unknown to this version's
-        // codec should still retain translatable child components instead of being skipped.
-        for (Map.Entry<String, JsonElement> entry : new ArrayList<>(object.entrySet())) {
-            if ("text".equals(entry.getKey()) || "translate".equals(entry.getKey())) continue;
-            // A primitive child such as color:"$(event_color)" is a property value, not a nested
-            // component. Treating every primitive as a component would turn it into
-            // {translate:"..."} and change the style semantics.
-            if (!entry.getValue().isJsonObject() && !entry.getValue().isJsonArray()) continue;
-            MacroTransform child = transformMacroComponent(entry.getValue(), warningResource);
-            if (!child.changed()) continue;
-            object.add(entry.getKey(), child.value());
-            changed = true;
-        }
-        return new MacroTransform(object, changed);
-    }
-
-    private static String exactMacro(String value) {
-        if (value == null || !value.startsWith("$(") || !value.endsWith(")")) return null;
-        if (value.length() <= 3) return null;
-        String name = value.substring(2, value.length() - 1);
-        if (name.indexOf('(') >= 0 || name.indexOf(')') >= 0 || name.isBlank()) return null;
-        return name;
-    }
-
-    private static void recordMacroWarning(String name, String resource) {
-        recordMacroTemplateWarning("$(" + name + ")", resource);
-    }
-
-    static void recordMacroTemplateWarning(String template, String resource) {
-        MacroCallGraph graph = MACRO_CALL_GRAPH.get();
-        String function = CURRENT_FUNCTION_ID.get();
-        List<String> names = macroNames(template);
-        Set<String> known = new LinkedHashSet<>();
-        if (graph != null && function != null) {
-            for (Map<String, String> binding : graph.bindings(function)) {
-                if (!binding.keySet().containsAll(names)) continue;
-                String value = template;
-                for (String name : names) {
-                    value = value.replace("$(" + name + ")", binding.get(name));
-                }
-                if (value.contains("$(") || value.isBlank()) continue;
-                if (TranslationContext.addCatalogEntry(value, value)) {
-                    known.add(value);
-                } else {
-                    CommandParseSupport.recordCommandFailure(
-                            "function_macro_component",
-                            value,
-                            new IllegalStateException(
-                                    "A dynamic translation key conflicts with an existing catalog entry"));
-                }
-            }
-
-            // Older or deliberately partial call indexes may know independent values without a
-            // complete binding. They are still useful for the exact `translate:$(name)` case.
-            if (known.isEmpty() && names.size() == 1 && template.equals("$(" + names.getFirst() + ")")) {
-                for (String value : graph.values(function, names.getFirst())) {
-                    if (TranslationContext.addCatalogEntry(value, value)) known.add(value);
-                }
-            }
-        }
-        String suffix =
-                known.isEmpty()
-                        ? " No statically known call-chain value was found."
-                        : " Runtime translation keys were catalogued with source values: " + known;
-        CommandParseSupport.recordCommandFailure(
-                "function_macro_component",
-                resource,
-                new IllegalArgumentException(
-                        "Macro text template " + template + " was emitted as a translate key."
-                                + suffix));
-    }
-
-    private record MacroTransform(JsonElement value, boolean changed) {
-        private static MacroTransform unchanged(JsonElement value) {
-            return new MacroTransform(value, false);
-        }
-
-        private static MacroTransform changed(JsonElement value) {
-            return new MacroTransform(value, true);
-        }
-    }
 }

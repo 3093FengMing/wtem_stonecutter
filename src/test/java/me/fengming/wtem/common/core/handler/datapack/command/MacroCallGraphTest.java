@@ -1,6 +1,7 @@
 package me.fengming.wtem.common.core.handler.datapack.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -62,7 +63,7 @@ class MacroCallGraphTest {
     }
 
     @Test
-    void feedsKnownValuesBackIntoMacroExtractionWithoutReplacingTheRuntimeMacro() {
+    void parameterizesTextMacrosAfterMaterializingTheirCallerValue() {
         FunctionHandler.initializeMacroCallGraph(
                 Map.of(
                         "test:caller.mcfunction",
@@ -76,8 +77,30 @@ class MacroCallGraphTest {
                 FunctionHandler.processFunction(
                         "$title @a title {\"text\":\"$(marco)\"}", "test:dialog.mcfunction");
 
-        assertTrue(result.contains("\"translate\":\"$(marco)\""), result);
-        assertTrue(TranslationContext.snapshot().containsValue("item.the_best_sword.name"));
+        assertTrue(result.contains("\"translate\":\"datapack.test.dialog\""), result);
+        assertTrue(result.contains("\"with\":[{\"text\":\"$(marco)\"}]"), result);
+        assertEquals("%s", TranslationContext.snapshot().get("datapack.test.dialog"));
+    }
+
+    @Test
+    void resolvesNonTextStyleMacrosButKeepsTextMacrosAsWithArguments() {
+        String command =
+                "$title @a title {\"text\":\"Hello $(name)\",\"color\":\"$(color)\"}";
+        FunctionHandler.initializeMacroCallGraph(
+                Map.of(
+                        "test:caller.mcfunction",
+                                "data merge storage test:runtime {name:\"World\",color:\"gold\"}\n"
+                                        + "function test:styled with storage test:runtime",
+                        "test:styled.mcfunction", command));
+        TranslationContext.clear();
+        TranslationContext.setKey("datapack.test.styled");
+
+        String result = FunctionHandler.processFunction(command, "test:styled.mcfunction");
+
+        assertTrue(result.contains("\"with\":[{\"text\":\"$(name)\"}]"), result);
+        assertTrue(result.contains("\"color\":\"gold\""), result);
+        assertTrue(!result.contains("$(color)"), result);
+        assertEquals("Hello %s", TranslationContext.snapshot().get("datapack.test.styled"));
     }
 
     @Test
@@ -94,7 +117,7 @@ class MacroCallGraphTest {
     }
 
     @Test
-    void materializesCallerArgumentsForNormalExtractionThenRestoresTheMacro() {
+    void materializesNonTextCallerArgumentsBeforeNormalExtraction() {
         FunctionHandler.initializeMacroCallGraph(
                 Map.of(
                         "test:caller.mcfunction",
@@ -110,10 +133,95 @@ class MacroCallGraphTest {
                         "$summon $(entity) ~ ~ ~ {CustomName:'{\"text\":\"Hello\"}'}",
                         "test:summon.mcfunction");
 
-        assertTrue(result.contains("$(entity)"), result);
+        assertTrue(result.contains("minecraft:pig"), result);
+        assertTrue(!result.contains("$(entity)"), result);
         assertTrue(result.contains("translate"), result);
         assertEquals("Hello", TranslationContext.snapshot().get("entity.pig.1.name"));
     }
+
+    @Test
+    void doesNotTreatAnOrdinaryNbtNameFieldAsComponentText() {
+        String command =
+                "$summon minecraft:pig ~ ~ ~ {name:\"$(name)\",CustomName:'{\"text\":\"Guard\"}'}";
+        FunctionHandler.initializeMacroCallGraph(
+                Map.of(
+                        "test:caller.mcfunction",
+                                "data merge storage test:runtime {name:\"Alex\"}\n"
+                                        + "function test:summon with storage test:runtime",
+                        "test:summon.mcfunction", command));
+        TranslationContext.clear();
+        TranslationContext.setKey("datapack.test.summon");
+
+        String result = FunctionHandler.processFunction(command, "test:summon.mcfunction");
+
+        assertTrue(result.contains("Alex"), result);
+        assertTrue(!result.contains("$(name)"), result);
+        assertTrue(result.contains("translate"), result);
+        assertEquals("Guard", TranslationContext.snapshot().get("entity.pig.1.name"));
+    }
+
+    @Test
+    void keepsAScoreNameAsAStructuredTranslationArgument() {
+        String command =
+                "$title @a title [{\"text\":\"Score: \"},{\"score\":{\"name\":\"$(player)\",\"objective\":\"points\"}}]";
+        FunctionHandler.initializeMacroCallGraph(
+                Map.of(
+                        "test:caller.mcfunction",
+                                "data merge storage test:runtime {player:\"Alex\"}\n"
+                                        + "function test:score with storage test:runtime",
+                        "test:score.mcfunction", command));
+        TranslationContext.clear();
+        TranslationContext.setKey("datapack.test.score");
+
+        String result = FunctionHandler.processFunction(command, "test:score.mcfunction");
+
+        assertTrue(result.contains("\"translate\":\"datapack.test.score\""), result);
+        assertTrue(result.contains("\"score\":{\"name\":\"$(player)\""), result);
+        assertTrue(!result.contains("Alex"), result);
+        assertEquals("Score: %s", TranslationContext.snapshot().get("datapack.test.score"));
+    }
+
+    //? if >=1.21.10 {
+    @Test
+    void emitsAllStructuredComponentMacrosAsRawWithArgumentsAndReparsesThem() {
+        Map<String, String> components =
+                Map.of(
+                        "score", "{score:{name:\"@s\",objective:\"points\"}}",
+                        "keybind", "{keybind:\"key.jump\"}",
+                        "selector", "{selector:\"@s\"}",
+                        "nbt", "{nbt:\"foo\",storage:\"test:runtime\"}",
+                        "object", "{object:\"atlas\",atlas:\"minecraft:blocks\",sprite:\"minecraft:stone\"}");
+
+        for (Map.Entry<String, String> component : components.entrySet()) {
+            String command =
+                    "$tellraw @s {\"text\":\"Before $(marco) after\",\"color\":\"gold\"}";
+            FunctionHandler.initializeMacroCallGraph(
+                    Map.of(
+                            "test:caller.mcfunction",
+                                    "data merge storage test:runtime {marco:"
+                                            + component.getValue()
+                                            + "}\nfunction test:structured with storage test:runtime",
+                            "test:structured.mcfunction", command));
+            TranslationContext.clear();
+            TranslationContext.setKey("datapack.test.structured." + component.getKey());
+
+            String result = FunctionHandler.processFunction(command, "test:structured.mcfunction");
+            assertTrue(result.contains("\"with\":[$(marco)]"), component.getKey() + ": " + result);
+            assertFalse(
+                    result.contains("\"with\":[{\"text\":\"$(marco)\"}]"),
+                    component.getKey() + ": " + result);
+
+            String instantiated =
+                    MacroArgumentRestorer.CommandLine.of(result, Map.of("marco", component.getValue()))
+                            .text();
+            assertTrue(
+                    CommandParseSupport.isValidCommand(
+                            CommandParseSupport.parserContext(), instantiated),
+                    component.getKey() + " did not reparse: " + instantiated);
+            FunctionHandler.releaseMacroCallGraph();
+        }
+    }
+    //?}
 
     @Test
     void keepsArgumentsCorrelatedPerCallSite() {
@@ -204,7 +312,7 @@ class MacroCallGraphTest {
     }
 
     @Test
-    void restoresAMacroInsideANormallySerializedItemArgument() {
+    void materializesAMacroInsideAnItemIdentifier() {
         //? if >=1.21.5 {
         String command = "$give @s $(item)[item_name={\"text\":\"Hello\"}]";
         //?} else {
@@ -221,14 +329,14 @@ class MacroCallGraphTest {
 
         String result = FunctionHandler.processFunction(command, "test:item.mcfunction");
 
-        assertTrue(result.contains("$(item)"), result);
-        assertTrue(!result.contains("minecraft:$(item)"), result);
+        assertTrue(result.contains("minecraft:paper"), result);
+        assertTrue(!result.contains("$(item)"), result);
         assertTrue(result.contains("translate"), result);
         assertTrue(TranslationContext.snapshot().containsValue("Hello"));
     }
 
     @Test
-    void restoresATranslatedMacroValueInsideAnItemComponent() {
+    void parameterizesATextMacroInsideAnItemComponent() {
         //? if >=1.21.5 {
         String command = "$give @s paper[item_name={\"text\":\"$(name)\"}]";
         //?} else {
@@ -248,11 +356,11 @@ class MacroCallGraphTest {
         assertTrue(result.contains("translate"), result);
         assertTrue(result.contains("$(name)"), result);
         assertTrue(!result.contains("Hello"), result);
-        assertTrue(TranslationContext.snapshot().containsValue("Hello"));
+        assertEquals("%s", TranslationContext.snapshot().get("item.paper.1.item_name"));
     }
 
     @Test
-    void catalogsEveryCallerValueUnderTheRuntimeTranslationKey() {
+    void keepsOneParameterizedTemplateAcrossMultipleCallerValues() {
         String command = "$title @a title {\"text\":\"Hello $(name)\"}";
         FunctionHandler.initializeMacroCallGraph(
                 Map.of(
@@ -268,14 +376,14 @@ class MacroCallGraphTest {
 
         String result = FunctionHandler.processFunction(command, "test:greeting.mcfunction");
 
-        assertTrue(result.contains("\"translate\":\"Hello $(name)\""), result);
-        assertEquals("Hello Alice", TranslationContext.snapshot().get("Hello Alice"));
-        assertEquals("Hello Bob", TranslationContext.snapshot().get("Hello Bob"));
-        assertEquals(Set.of("Hello Alice", "Hello Bob"), TranslationContext.snapshot().keySet());
+        assertTrue(result.contains("\"translate\":\"datapack.test.greeting\""), result);
+        assertTrue(result.contains("\"with\":[{\"text\":\"$(name)\"}]"), result);
+        assertEquals("Hello %s", TranslationContext.snapshot().get("datapack.test.greeting"));
+        assertEquals(Set.of("datapack.test.greeting"), TranslationContext.snapshot().keySet());
     }
 
     @Test
-    void restoresOnlyTheMacroOccurrenceWhenEqualStaticValuesSurroundIt() {
+    void keepsOnlyTheMacroOccurrenceWhenEqualStaticValuesSurroundIt() {
         String command = "$title @a title {\"text\":\"1 $(value) 1\"}";
         FunctionHandler.initializeMacroCallGraph(
                 Map.of(
@@ -289,11 +397,12 @@ class MacroCallGraphTest {
         String result =
                 FunctionHandler.processFunction(command, "test:repeated_value.mcfunction");
 
-        assertTrue(result.contains("\"translate\":\"1 $(value) 1\""), result);
+        assertTrue(result.contains("\"translate\":\"datapack.test.repeated_value\""), result);
+        assertTrue(result.contains("\"with\":[{\"text\":\"$(value)\"}]"), result);
     }
 
     @Test
-    void restoresDifferentMacrosThatReceiveTheSameValue() {
+    void keepsDifferentTextMacrosThatReceiveTheSameValueDistinct() {
         String command = "$title @a title {\"text\":\"$(left)/$(right)\"}";
         FunctionHandler.initializeMacroCallGraph(
                 Map.of(
@@ -306,11 +415,13 @@ class MacroCallGraphTest {
 
         String result = FunctionHandler.processFunction(command, "test:same_values.mcfunction");
 
-        assertTrue(result.contains("\"translate\":\"$(left)/$(right)\""), result);
+        assertTrue(result.contains("\"translate\":\"datapack.test.same_values\""), result);
+        assertTrue(result.contains("\"text\":\"$(left)\""), result);
+        assertTrue(result.contains("\"text\":\"$(right)\""), result);
     }
 
     @Test
-    void restoresEveryOccurrenceOfTheSameMacro() {
+    void keepsEveryOccurrenceOfTheSameTextMacro() {
         String command = "$title @a title {\"text\":\"$(name) + $(name)\"}";
         FunctionHandler.initializeMacroCallGraph(
                 Map.of(
@@ -324,11 +435,12 @@ class MacroCallGraphTest {
         String result =
                 FunctionHandler.processFunction(command, "test:repeated_macro.mcfunction");
 
-        assertTrue(result.contains("\"translate\":\"$(name) + $(name)\""), result);
+        assertTrue(result.contains("\"translate\":\"datapack.test.repeated_macro\""), result);
+        assertTrue(result.contains("\"with\":[{\"text\":\"$(name)\"},{\"text\":\"$(name)\"}]"), result);
     }
 
     @Test
-    void restoresAMacroInsideANormallySerializedBlockArgument() {
+    void materializesAMacroInsideABlockIdentifier() {
         String command =
                 "$setblock ~ ~ ~ $(block){CustomName:'{\"text\":\"Storage\"}'}";
         FunctionHandler.initializeMacroCallGraph(
@@ -342,8 +454,8 @@ class MacroCallGraphTest {
 
         String result = FunctionHandler.processFunction(command, "test:block.mcfunction");
 
-        assertTrue(result.contains("$(block)"), result);
-        assertTrue(!result.contains("minecraft:$(block)"), result);
+        assertTrue(result.contains("minecraft:chest"), result);
+        assertTrue(!result.contains("$(block)"), result);
         assertTrue(result.contains("translate"), result);
         assertTrue(TranslationContext.snapshot().containsValue("Storage"));
     }

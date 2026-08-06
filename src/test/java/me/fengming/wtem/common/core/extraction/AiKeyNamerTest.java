@@ -35,7 +35,7 @@ class AiKeyNamerTest {
             WtemConfig.AiTranslation settings =
                     new WtemConfig.AiTranslation(
                             false,
-                            server.endpoint(),
+                            server.baseEndpoint(),
                             "test-key",
                             "test-model",
                             "zh-CN",
@@ -60,6 +60,39 @@ class AiKeyNamerTest {
             assertTrue(server.requestBody().contains("Semantic key prompt marker"));
             assertTrue(server.requestBody().contains("item.wooden_sword.1.name"));
             assertTrue(server.requestBody().contains("The Best Sword"));
+            assertTrue(server.requestHeaders().startsWith("POST /v1/chat/completions "));
+        }
+    }
+
+    @Test
+    void readsTheResponsesProtocolOutputText() throws Exception {
+        try (FakeAiServer server =
+                new FakeAiServer("{\"output_text\":\"{\\\"key\\\":\\\"item.responses.name\\\"}\"}")) {
+            WtemConfig.AiTranslation defaults = WtemConfig.AiTranslation.DEFAULT;
+            WtemConfig.AiTranslation settings =
+                    new WtemConfig.AiTranslation(
+                            false,
+                            server.baseEndpoint(),
+                            "test-key",
+                            "test-model",
+                            "zh-CN",
+                            "zh_cn.json",
+                            10,
+                            10,
+                            defaults.translationPrompt(),
+                            defaults.keyNamingPrompt(),
+                            WtemConfig.AiTranslation.Protocol.RESPONSES);
+            TranslationContext.clear();
+            TranslationContext.setKeyNaming(
+                    new WtemConfig.KeyNaming(WtemConfig.KeyNaming.Scheme.AI, 8));
+            TranslationContext.setAiKeyNamer(
+                    new AiKeyNamer(settings, new ExtractionSession()));
+            TranslationContext.setKey("item.paper.1.name");
+
+            assertEquals("item.responses.name", TranslationContext.addEntry("Responses"));
+            assertTrue(server.requestHeaders().startsWith("POST /v1/responses "));
+            assertTrue(server.requestBody().contains("\"input\""));
+            assertTrue(!server.requestBody().contains("\"messages\""));
         }
     }
 
@@ -70,6 +103,7 @@ class AiKeyNamerTest {
         private final String response;
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
         private volatile String requestBody = "";
+        private volatile String requestHeaders = "";
 
         private FakeAiServer(String response) throws IOException {
             this.response = response;
@@ -79,8 +113,8 @@ class AiKeyNamerTest {
             this.worker.start();
         }
 
-        String endpoint() {
-            return "http://127.0.0.1:" + this.server.getLocalPort() + "/v1/chat/completions";
+        String baseEndpoint() {
+            return "http://127.0.0.1:" + this.server.getLocalPort() + "/v1";
         }
 
         String requestBody() {
@@ -89,10 +123,17 @@ class AiKeyNamerTest {
             return this.requestBody;
         }
 
+        String requestHeaders() {
+            Throwable throwable = this.failure.get();
+            if (throwable != null) throw new AssertionError(throwable);
+            return this.requestHeaders;
+        }
+
         private void serve() {
             try (Socket socket = this.server.accept()) {
                 InputStream input = socket.getInputStream();
                 String headers = readHeaders(input);
+                this.requestHeaders = headers;
                 int contentLength = contentLength(headers);
                 this.requestBody =
                         new String(input.readNBytes(contentLength), StandardCharsets.UTF_8);
@@ -131,7 +172,7 @@ class AiKeyNamerTest {
         }
 
         private static int contentLength(String headers) throws IOException {
-            for (String line : headers.split("\\r\\n")) {
+            for (String line : headers.lines().toList()) {
                 String lower = line.toLowerCase(Locale.ROOT);
                 if (lower.startsWith("content-length:")) {
                     return Integer.parseInt(line.substring(line.indexOf(':') + 1).trim());

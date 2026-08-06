@@ -32,9 +32,12 @@ class WtemConfigTest {
         assertFalse(config.rebuildNestedKeys());
         assertTrue(config.resourcePack().enabled());
         assertEquals(WtemConfig.ResourcePack.Format.ZIP, config.resourcePack().format());
+        assertEquals("resources.zip", config.resourcePack().name());
         assertEquals(WtemConfig.Skipped.DEFAULT, config.skipped());
         assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, config.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, config.languageFile());
+        assertEquals(WtemConfig.DEFAULT_SAVED_DATA_TEXT_FIELDS, config.savedDataTextFields());
+        assertTrue(config.savedDataTextFields().contains("back_text"));
     }
 
     @Test
@@ -115,6 +118,33 @@ class WtemConfigTest {
         assertFalse(parse("{\"rebuild_nested_keys\": false}").rebuildNestedKeys());
         assertTrue(parse("{\"rebuild_nested_keys\": true}").rebuildNestedKeys());
         assertFalse(parse("{\"rebuild_nested_keys\": \"false\"}").rebuildNestedKeys());
+    }
+
+    @Test
+    void readsAndNormalizesSavedDataTextFields() {
+        WtemConfig configured =
+                parse(
+                        """
+                        {
+                          "saved_data_text_fields": [
+                            " Custom_Message ",
+                            "CUSTOM_MESSAGE",
+                            "Title",
+                            "",
+                            null,
+                            4
+                          ]
+                        }
+                        """);
+
+        assertEquals(List.of("custom_message", "title"), configured.savedDataTextFields());
+        assertEquals(List.of(), parse("{\"saved_data_text_fields\": []}").savedDataTextFields());
+        assertEquals(
+                WtemConfig.DEFAULT_SAVED_DATA_TEXT_FIELDS,
+                parse("{\"saved_data_text_fields\": \"name\"}").savedDataTextFields());
+
+        WtemConfig reloaded = WtemConfig.fromJson(configured.toJson(RESOURCE_DIRECTORIES));
+        assertEquals(configured.savedDataTextFields(), reloaded.savedDataTextFields());
     }
 
     @Test
@@ -303,6 +333,24 @@ class WtemConfigTest {
     }
 
     @Test
+    void matchesQuestionMarkAndTreatsRegexPunctuationAsLiteralInGlobs() {
+        WtemConfig config =
+                parse(
+                        """
+                        {
+                          "filters": {
+                            "region": ["minecraft:overworld/chunk/1_?", "literal/[abc]+"]
+                          }
+                        }
+                        """);
+
+        assertTrue(config.filters().matchesRegion("minecraft:overworld/chunk/1_2"));
+        assertFalse(config.filters().matchesRegion("minecraft:overworld/chunk/1_22"));
+        assertTrue(config.filters().matchesRegion("literal/[abc]+"));
+        assertFalse(config.filters().matchesRegion("literal/a"));
+    }
+
+    @Test
     void supportsSelectingNoSourcesWithoutConfusingItWithTheDefaultAllSelection() {
         WtemConfig.Filters.Selection all = WtemConfig.Filters.Selection.DEFAULT;
         WtemConfig.Filters.Selection none =
@@ -331,7 +379,8 @@ class WtemConfigTest {
                             "region": ["minecraft:overworld/*"],
                             "selection": {"entities": ["minecraft:zombie"]}
                           },
-                          "outputs": {"export_schema": true}
+                          "outputs": {"export_schema": true},
+                          "saved_data_text_fields": ["Custom_Message"]
                         }
                         """);
         WtemConfig.Filters.Selection selection =
@@ -358,6 +407,8 @@ class WtemConfigTest {
         assertEquals(original.outputs(), updated.outputs());
         assertEquals(original.aiTranslation(), updated.aiTranslation());
         assertEquals(original.resourcePack(), updated.resourcePack());
+        assertEquals(original.savedDataTextFields(), updated.savedDataTextFields());
+        assertEquals(List.of("custom_message"), updated.savedDataTextFields());
     }
 
     @Test
@@ -386,6 +437,7 @@ class WtemConfigTest {
                         {
                           "key_naming": {"scheme": "ai"},
                           "ai_translation": {
+                            "protocol": "responses",
                             "translation_prompt": "Translate to {target_language}; JSON only.",
                             "key_naming_prompt": "Return {\\"key\\":\\"semantic.key\\"}."
                           }
@@ -399,10 +451,17 @@ class WtemConfigTest {
         assertEquals(
                 "Return {\"key\":\"semantic.key\"}.",
                 config.aiTranslation().keyNamingPrompt());
+        assertEquals(
+                WtemConfig.AiTranslation.Protocol.RESPONSES,
+                config.aiTranslation().protocol());
 
         WtemConfig reloaded = WtemConfig.fromJson(config.toJson(RESOURCE_DIRECTORIES));
         assertEquals(config.aiTranslation(), reloaded.aiTranslation());
         assertEquals(config.keyNaming(), reloaded.keyNaming());
+        assertFalse(
+                config.toJson(RESOURCE_DIRECTORIES)
+                        .getAsJsonObject("ai_translation")
+                        .has("batch_size"));
     }
 
     @Test
@@ -471,6 +530,8 @@ class WtemConfigTest {
         assertTrue(contents.contains("translation_prompt"), contents);
         assertTrue(contents.contains("key_naming_prompt"), contents);
         assertTrue(contents.contains("storage_files"), contents);
+        assertTrue(contents.contains("saved_data_text_fields"), contents);
+        assertFalse(contents.contains("output_directory"), contents);
         WtemConfig reloaded = WtemConfig.fromJson(JsonParser.parseString(contents));
         for (WtemConfig.Stage stage : WtemConfig.Stage.values()) {
             assertTrue(reloaded.isEnabled(stage), stage::name);
@@ -481,10 +542,12 @@ class WtemConfigTest {
         assertFalse(reloaded.rebuildNestedKeys());
         assertTrue(reloaded.resourcePack().enabled());
         assertEquals(WtemConfig.ResourcePack.Format.ZIP, reloaded.resourcePack().format());
+        assertEquals("resources.zip", reloaded.resourcePack().name());
         assertEquals(WtemConfig.Skipped.DEFAULT, reloaded.skipped());
         assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, reloaded.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_BUILTIN_ENTRIES, reloaded.builtinEntries());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, reloaded.languageFile());
+        assertEquals(WtemConfig.DEFAULT_SAVED_DATA_TEXT_FIELDS, reloaded.savedDataTextFields());
     }
 
     @Test

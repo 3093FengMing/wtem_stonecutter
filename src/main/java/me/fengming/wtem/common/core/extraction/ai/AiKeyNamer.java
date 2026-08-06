@@ -10,7 +10,7 @@ import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 /** On-demand semantic key naming with caching, validation, and a run-scoped circuit breaker.
  *
  * @author FengMing
- * */
+ */
 public final class AiKeyNamer {
     private static final int MAX_KEY_LENGTH = 160;
 
@@ -70,8 +70,22 @@ public final class AiKeyNamer {
     }
 
     private static boolean validKey(String key) {
-        return !key.isBlank()
-                && key.length() <= MAX_KEY_LENGTH
-                && key.matches("[a-z0-9_]+(?:\\.[a-z0-9_]+)*");
+        if (key == null || key.isBlank() || key.length() > MAX_KEY_LENGTH) return false;
+        boolean segmentHasCharacter = false;
+        for (int i = 0; i < key.length(); i++) {
+            char character = key.charAt(i);
+            if (character == '.') {
+                if (!segmentHasCharacter) return false;
+                segmentHasCharacter = false;
+                continue;
+            }
+            if (!(character >= 'a' && character <= 'z')
+                    && !(character >= '0' && character <= '9')
+                    && character != '_') {
+                return false;
+            }
+            segmentHasCharacter = true;
+        }
+        return segmentHasCharacter;
     }
 }

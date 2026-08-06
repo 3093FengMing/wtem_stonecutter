@@ -130,12 +130,18 @@ public final class WtemConfigScreen {
     private static ConfigCategory aiTranslation(Draft draft) {
         ConfigCategory.Builder category = ConfigCategory.createBuilder().name(text("gui.wtem.config.ai"));
         category.option(bool("gui.wtem.config.ai.enabled", WtemConfig.DEFAULT.aiTranslation().enabled(), () -> draft.aiEnabled, value -> draft.aiEnabled = value));
+        category.option(
+                Option.<WtemConfig.AiTranslation.Protocol>createBuilder()
+                        .name(text("gui.wtem.config.ai.protocol"))
+                        .description(OptionDescription.of(text("gui.wtem.config.ai.protocol.description")))
+                        .binding(WtemConfig.DEFAULT.aiTranslation().protocol(), () -> draft.aiProtocol, value -> draft.aiProtocol = value)
+                        .controller(option -> EnumControllerBuilder.create(option).enumClass(WtemConfig.AiTranslation.Protocol.class))
+                        .build());
         category.option(string("gui.wtem.config.ai.endpoint", WtemConfig.DEFAULT.aiTranslation().endpoint(), () -> draft.aiEndpoint, value -> draft.aiEndpoint = value));
         category.option(string("gui.wtem.config.ai.api_key", "", () -> draft.aiApiKey, value -> draft.aiApiKey = value));
         category.option(string("gui.wtem.config.ai.model", WtemConfig.DEFAULT.aiTranslation().model(), () -> draft.aiModel, value -> draft.aiModel = value));
         category.option(string("gui.wtem.config.ai.target_language", WtemConfig.DEFAULT.aiTranslation().targetLanguage(), () -> draft.aiTargetLanguage, value -> draft.aiTargetLanguage = value));
         category.option(string("gui.wtem.config.ai.output_file", WtemConfig.DEFAULT.aiTranslation().outputFile(), () -> draft.aiOutputFile, value -> draft.aiOutputFile = value));
-        category.option(integer("gui.wtem.config.ai.batch_size", WtemConfig.DEFAULT.aiTranslation().batchSize(), () -> draft.aiBatchSize, value -> draft.aiBatchSize = value, 1, 200));
         category.option(integer("gui.wtem.config.ai.timeout", WtemConfig.DEFAULT.aiTranslation().timeoutSeconds(), () -> draft.aiTimeout, value -> draft.aiTimeout = value, 1, 600));
         category.option(string("gui.wtem.config.ai.translation_prompt", WtemConfig.DEFAULT.aiTranslation().translationPrompt(), () -> draft.aiTranslationPrompt, value -> draft.aiTranslationPrompt = value));
         category.option(string("gui.wtem.config.ai.key_naming_prompt", WtemConfig.DEFAULT.aiTranslation().keyNamingPrompt(), () -> draft.aiKeyNamingPrompt, value -> draft.aiKeyNamingPrompt = value));
@@ -148,12 +154,14 @@ public final class WtemConfigScreen {
         category.option(
                 Option.<WtemConfig.ResourcePack.Format>createBuilder()
                         .name(text("gui.wtem.config.resource_pack.format"))
+                        .description(
+                                OptionDescription.of(
+                                        text("gui.wtem.config.resource_pack.format.description")))
                         .binding(WtemConfig.DEFAULT.resourcePack().format(), () -> draft.packFormat, value -> draft.packFormat = value)
                         .controller(option -> EnumControllerBuilder.create(option).enumClass(WtemConfig.ResourcePack.Format.class))
                         .build());
         category.option(string("gui.wtem.config.resource_pack.name", WtemConfig.DEFAULT.resourcePack().name(), () -> draft.packName, value -> draft.packName = value));
         category.option(string("gui.wtem.config.resource_pack.description", WtemConfig.DEFAULT.resourcePack().description(), () -> draft.packDescription, value -> draft.packDescription = value));
-        category.option(string("gui.wtem.config.resource_pack.directory", WtemConfig.DEFAULT.resourcePack().outputDirectory(), () -> draft.packDirectory, value -> draft.packDirectory = value));
         category.option(integer("gui.wtem.config.resource_pack.pack_format", WtemConfig.DEFAULT.resourcePack().packFormat(), () -> draft.packPackFormat, value -> draft.packPackFormat = value, 0, 999));
         return category.build();
     }
@@ -162,6 +170,7 @@ public final class WtemConfigScreen {
         ConfigCategory.Builder category = ConfigCategory.createBuilder().name(text("gui.wtem.config.advanced"));
         category.option(bool("gui.wtem.config.skipped.command_output", WtemConfig.DEFAULT.skipped().commandBlockOutput(), () -> draft.commandBlockOutput, value -> draft.commandBlockOutput = value));
         category.option(bool("gui.wtem.config.skipped.filtered_text", WtemConfig.DEFAULT.skipped().filteredText(), () -> draft.filteredText, value -> draft.filteredText = value));
+        category.group(list("gui.wtem.config.saved_data_text_fields", WtemConfig.DEFAULT.savedDataTextFields(), () -> draft.savedDataTextFields, values -> draft.savedDataTextFields = values));
         return category.build();
     }
 
@@ -237,6 +246,7 @@ public final class WtemConfigScreen {
         private boolean commandBlockOutput;
         private boolean filteredText;
         private List<String> skippedPaths;
+        private List<String> savedDataTextFields;
         private List<String> filtersRegion;
         private List<String> filtersDatapack;
         private List<String> filtersStorage;
@@ -249,6 +259,7 @@ public final class WtemConfigScreen {
         private String schemaFile;
         private String languageFile;
         private boolean aiEnabled;
+        private WtemConfig.AiTranslation.Protocol aiProtocol;
         private String aiEndpoint;
         private String aiApiKey;
         private String aiModel;
@@ -262,7 +273,6 @@ public final class WtemConfigScreen {
         private WtemConfig.ResourcePack.Format packFormat;
         private String packName;
         private String packDescription;
-        private String packDirectory;
         private int packPackFormat;
 
         static Draft from(WtemConfig config) {
@@ -279,6 +289,7 @@ public final class WtemConfigScreen {
             draft.commandBlockOutput = config.skipped().commandBlockOutput();
             draft.filteredText = config.skipped().filteredText();
             draft.skippedPaths = config.skippedPaths();
+            draft.savedDataTextFields = config.savedDataTextFields();
             draft.filtersRegion = config.filters().region();
             draft.filtersDatapack = config.filters().datapack();
             draft.filtersStorage = config.filters().storage();
@@ -291,6 +302,7 @@ public final class WtemConfigScreen {
             draft.schemaFile = config.outputs().schemaFile();
             draft.languageFile = config.languageFile();
             draft.aiEnabled = config.aiTranslation().enabled();
+            draft.aiProtocol = config.aiTranslation().protocol();
             draft.aiEndpoint = config.aiTranslation().endpoint();
             draft.aiApiKey = config.aiTranslation().apiKey();
             draft.aiModel = config.aiTranslation().model();
@@ -304,7 +316,6 @@ public final class WtemConfigScreen {
             draft.packFormat = config.resourcePack().format();
             draft.packName = config.resourcePack().name();
             draft.packDescription = config.resourcePack().description();
-            draft.packDirectory = config.resourcePack().outputDirectory();
             draft.packPackFormat = config.resourcePack().packFormat();
             return draft;
         }
@@ -343,8 +354,10 @@ public final class WtemConfigScreen {
                             aiBatchSize,
                             aiTimeout,
                             aiTranslationPrompt,
-                            aiKeyNamingPrompt),
-                    new WtemConfig.ResourcePack(packEnabled, packFormat, packName, packDescription, packDirectory, packPackFormat));
+                            aiKeyNamingPrompt,
+                            aiProtocol),
+                    new WtemConfig.ResourcePack(packEnabled, packFormat, packName, packDescription, packPackFormat),
+                    savedDataTextFields);
         }
 
         private WtemConfig.Filters.Selection configSelection() {

@@ -49,6 +49,23 @@ class ExtractionDiagnosticsTest {
     }
 
     @Test
+    void recordsExpectedWarningsWithoutAThrowable() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+
+        diagnostics.recordWarning(
+                "function_macro_component",
+                "datapacks > example:function.mcfunction (key datapack.example.function)",
+                "Parameterized text component was emitted as a translate key: %s");
+
+        ExtractionDiagnostics.Failure warning = diagnostics.failures().getFirst();
+        assertEquals(null, warning.cause());
+        assertEquals(
+                "Parameterized text component was emitted as a translate key: %s",
+                warning.displayMessage());
+        assertTrue(warning.resource().contains("function.mcfunction"));
+    }
+
+    @Test
     void handsOutAnImmutableView() {
         ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
         diagnostics.record("datapack", "example:a.json", new RuntimeException());

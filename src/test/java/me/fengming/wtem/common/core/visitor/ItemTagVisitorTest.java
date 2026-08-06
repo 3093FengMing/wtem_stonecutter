@@ -11,6 +11,7 @@ import java.util.Map;
 import me.fengming.wtem.common.config.ConfigOverride;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.util.NbtUtils;
 import net.minecraft.SharedConstants;
 import net.minecraft.nbt.CompoundTag;
@@ -157,6 +158,44 @@ class ItemTagVisitorTest {
                 Map.of("writable_book.1.content.page0", "Notes"),
                 TranslationContext.snapshot());
         assertFalse(TranslationContext.records().getFirst().replaced());
+    }
+
+    @Test
+    void recordsAWarningForCatalogOnlyBookAndQuillPages() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        TranslationContext.setDiagnostics(diagnostics);
+        CompoundTag item = nbt("""
+                {"id":"minecraft:writable_book","components":{
+                  "minecraft:writable_book_content":{"pages":[{"raw":"Notes"}]}}}
+                """);
+
+        item.accept(new ItemTagVisitor());
+
+        ExtractionDiagnostics.Failure warning = diagnostics.failures().stream()
+                .filter(failure -> "writable_book".equals(failure.scope()))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(warning.resource().contains("writable_book.1"), warning.resource());
+        assertTrue(warning.displayMessage().contains("plain strings"), warning.displayMessage());
+    }
+
+    @Test
+    void warnsWhenAWrittenBookAuthorIsAPlainString() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        TranslationContext.setDiagnostics(diagnostics);
+        CompoundTag item = nbt("""
+                {"id":"minecraft:written_book","components":{
+                  "minecraft:written_book_content":{"author":"Alice","pages":[]}}}
+                """);
+
+        item.accept(new ItemTagVisitor());
+
+        ExtractionDiagnostics.Failure warning = diagnostics.failures().stream()
+                .filter(failure -> "written_book_string".equals(failure.scope()))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(warning.resource().contains("key book.1.author"), warning.resource());
+        assertTrue(warning.displayMessage().contains("author"), warning.displayMessage());
     }
 
     @Test

@@ -24,11 +24,56 @@ public final class ExtractionSession {
     private final AtomicInteger modifiedChunks = new AtomicInteger();
     private final AtomicInteger modifiedResources = new AtomicInteger();
     private final AtomicInteger modifiedSavedData = new AtomicInteger();
+    private final AtomicInteger aiCompletedEntries = new AtomicInteger();
+    private final AtomicInteger aiTotalEntries = new AtomicInteger();
+    private final AtomicInteger aiCompletedBatches = new AtomicInteger();
+    private final AtomicInteger aiTotalBatches = new AtomicInteger();
     private final AtomicBoolean partialWorldWrite = new AtomicBoolean();
     private volatile Throwable fatalFailure;
 
     public boolean start() {
         return this.status.compareAndSet(ExtractionStatus.READY, ExtractionStatus.RUNNING);
+    }
+
+    /** Opens the optional AI phase after the normal world/resource extraction has been published. */
+    public boolean beginAiTranslation(int totalEntries, int totalBatches) {
+        this.aiCompletedEntries.set(0);
+        this.aiCompletedBatches.set(0);
+        this.aiTotalEntries.set(Math.max(0, totalEntries));
+        this.aiTotalBatches.set(Math.max(0, totalBatches));
+        return this.status.compareAndSet(ExtractionStatus.RUNNING, ExtractionStatus.AI_TRANSLATING);
+    }
+
+    /** Records one completed AI request. Calls are deliberately monotonic for safe worker updates. */
+    public void recordAiBatch(int completedEntries, int completedBatches) {
+        if (completedEntries > 0) {
+            this.aiCompletedEntries.updateAndGet(
+                    current ->
+                            Math.min(
+                                    this.aiTotalEntries.get(),
+                                    Math.max(current, current + completedEntries)));
+        }
+        if (completedBatches > 0) {
+            this.aiCompletedBatches.updateAndGet(
+                    current ->
+                            Math.min(
+                                    this.aiTotalBatches.get(),
+                                    Math.max(current, current + completedBatches)));
+        }
+    }
+
+    /** Returns to the ordinary completion phase without overwriting a concurrent cancellation. */
+    public void finishAiTranslation() {
+        this.status.compareAndSet(ExtractionStatus.AI_TRANSLATING, ExtractionStatus.RUNNING);
+    }
+
+    public AiTranslationProgress aiTranslationProgress() {
+        return new AiTranslationProgress(
+                this.aiCompletedEntries.get(),
+                this.aiTotalEntries.get(),
+                this.aiCompletedBatches.get(),
+                this.aiTotalBatches.get(),
+                0.0F);
     }
 
     public CancellationResult requestCancellation() {

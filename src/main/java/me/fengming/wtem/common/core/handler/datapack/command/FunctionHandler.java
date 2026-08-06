@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
 import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.handler.datapack.HandlerFactory;
 import me.fengming.wtem.common.core.handler.datapack.NonExtraResourceHandler;
@@ -26,6 +27,7 @@ import net.minecraft.server.packs.resources.IoSupplier;
  */
 public class FunctionHandler extends NonExtraResourceHandler {
     public static final HandlerFactory FACTORY = FunctionHandler::new;
+    private static final ThreadLocal<CommandLocation> CURRENT_COMMAND = new ThreadLocal<>();
 
     public FunctionHandler(Function<Identifier, Path> filePath, Context context) {
         super("function", filePath, context);
@@ -64,6 +66,84 @@ public class FunctionHandler extends NonExtraResourceHandler {
         return processSource(source).value();
     }
 
+    /**
+     * Processes a command embedded in a component event.
+     *
+     * <p>Commands inside dialog click actions are strings, so they do not carry the leading
+     * {@code $} that marks a function macro line even when they contain {@code $(name)}. Adding a
+     * temporary marker lets the same caller-binding materialization and macro restoration path run
+     * for the embedded command; the marker is removed before the command is written back into the
+     * event object.
+     */
+    public static String processNestedCommand(String source) {
+        if (source == null || source.isBlank()) return source;
+        boolean hasMacros = !MacroCommandMaterializer.macroNames(source).isEmpty();
+        boolean addedMarker = hasMacros && !source.startsWith("$");
+        String command = addedMarker ? "$" + source : source;
+        String translated = processFunction(command);
+        return addedMarker && translated.startsWith("$")
+                ? translated.substring(1)
+                : translated;
+    }
+
+    /** Adds the current function file and physical line range to parser diagnostics. */
+    static String diagnosticLocation(String detail) {
+        ExtractionOrigin origin = TranslationContext.getOrigin();
+        StringBuilder location = new StringBuilder();
+        appendLocationPart(location, origin.source());
+        appendLocationPart(location, origin.location());
+        appendLocationPart(location, origin.subject());
+
+        CommandLocation command = CURRENT_COMMAND.get();
+        if (command != null) {
+            String file = functionFile(command.functionId());
+            if (!file.isBlank() && location.indexOf(file) < 0) appendLocationPart(location, file);
+            appendLocationPart(location, command.lineLabel());
+        }
+        String key = TranslationContext.getKey();
+        if (!key.isBlank()) {
+            appendLocationPart(location, "key " + key);
+        }
+        String commandDetail = compactDetail(detail);
+        if (!commandDetail.isBlank()) appendLocationPart(location, "command " + commandDetail);
+        return location.isEmpty() ? "unknown" : location.toString();
+    }
+
+    private static void appendLocationPart(StringBuilder location, String part) {
+        if (part == null || part.isBlank()) return;
+        if (!location.isEmpty()) location.append(" > ");
+        location.append(part);
+    }
+
+    private static String functionFile(String functionId) {
+        if (functionId == null || functionId.isBlank()) return "";
+        int separator = functionId.indexOf(':');
+        if (separator <= 0 || separator + 1 >= functionId.length()) return functionId;
+        String namespace = functionId.substring(0, separator);
+        String path = functionId.substring(separator + 1);
+        if (!path.startsWith("function/")) path = "function/" + path;
+        if (!path.endsWith(".mcfunction")) path += ".mcfunction";
+        return namespace + ":" + path;
+    }
+
+    private static String compactDetail(String detail) {
+        if (detail == null || detail.isBlank()) return "";
+        StringBuilder compactBuilder = new StringBuilder(detail.length());
+        boolean pendingSpace = false;
+        for (int i = 0; i < detail.length(); i++) {
+            char character = detail.charAt(i);
+            if (Character.isWhitespace(character)) {
+                pendingSpace = !compactBuilder.isEmpty();
+                continue;
+            }
+            if (pendingSpace) compactBuilder.append(' ');
+            compactBuilder.append(character);
+            pendingSpace = false;
+        }
+        String compact = compactBuilder.toString();
+        return compact.length() <= 240 ? compact : compact.substring(0, 237) + "...";
+    }
+
     /** Processes a function with a stable id so call-chain values can be applied in unit tools. */
     public static String processFunction(String source, String functionId) {
         String previousFunction = MacroCommandMaterializer.currentFunctionId();
@@ -93,6 +173,7 @@ public class FunctionHandler extends NonExtraResourceHandler {
         boolean changed = false;
 
         for (int i = 0; i < lines.size(); i++) {
+            int firstLineIndex = i;
             FunctionSource.LogicalCommand logicalLine =
                     FunctionSource.LogicalCommand.read(lines, i);
             i = logicalLine.lastLineIndex();
@@ -104,7 +185,13 @@ public class FunctionHandler extends NonExtraResourceHandler {
                     MacroArgumentRestorer.CommandLine.of(source);
             if (line.text().isEmpty()) continue;
 
-            try (var transaction = TranslationContext.beginTransaction()) {
+            try (var commandLocation =
+                            pushCommandLocation(
+                                    MacroCommandMaterializer.currentFunctionId(),
+                                    firstLineIndex,
+                                    logicalLine.lastLineIndex(),
+                                    source);
+                    var transaction = TranslationContext.beginTransaction()) {
                 int recordsBefore = TranslationContext.recordCount();
                 CommandExtraction extraction =
                         line.macro()
@@ -123,6 +210,14 @@ public class FunctionHandler extends NonExtraResourceHandler {
             }
         }
         return new ProcessedLines(List.copyOf(modified), changed);
+    }
+
+    private static CommandLocationScope pushCommandLocation(
+            String functionId, int firstLineIndex, int lastLineIndex, String source) {
+        CommandLocation previous = CURRENT_COMMAND.get();
+        CURRENT_COMMAND.set(
+                new CommandLocation(functionId, firstLineIndex, lastLineIndex, source));
+        return new CommandLocationScope(previous);
     }
 
     public static void initializeParser(
@@ -165,4 +260,27 @@ public class FunctionHandler extends NonExtraResourceHandler {
     private record FunctionResult(String value, boolean changed) {}
 
     private record ProcessedLines(List<String> lines, boolean changed) {}
+
+    private record CommandLocation(
+            String functionId, int firstLineIndex, int lastLineIndex, String source) {
+        String lineLabel() {
+            int first = this.firstLineIndex + 1;
+            int last = this.lastLineIndex + 1;
+            return first == last ? "line " + first : "lines " + first + "-" + last;
+        }
+    }
+
+    private static final class CommandLocationScope implements AutoCloseable {
+        private final CommandLocation previous;
+
+        private CommandLocationScope(CommandLocation previous) {
+            this.previous = previous;
+        }
+
+        @Override
+        public void close() {
+            if (this.previous == null) CURRENT_COMMAND.remove();
+            else CURRENT_COMMAND.set(this.previous);
+        }
+    }
 }

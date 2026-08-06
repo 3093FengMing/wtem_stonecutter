@@ -28,7 +28,12 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
                 "campfire", "chest", "chiseled_bookshelf",
                 "crafter", "dispenser", "dropper",
                 "furnace", "hopper", "shulker_box",
-                "smoker", "trapped_chest"
+                "smoker", "trapped_chest",
+                "shelf",
+                "oak_shelf", "spruce_shelf", "birch_shelf",
+                "jungle_shelf", "acacia_shelf", "dark_oak_shelf",
+                "mangrove_shelf", "cherry_shelf", "pale_oak_shelf",
+                "poplar_shelf", "warped_shelf", "crimson_shelf"
             );
 
     private static final String FILTERED_MESSAGES = "filtered_messages";

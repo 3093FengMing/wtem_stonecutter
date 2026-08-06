@@ -26,16 +26,18 @@ public final class ResourcePackExporter {
     public static boolean export(
             WtemConfig.ResourcePack settings,
             Path levelRoot,
-            Path languageFile,
+        Path languageFile,
             Path aiFile,
             ExtractionSession session) {
         if (settings == null || !settings.enabled()) return false;
-        Path outputDirectory = levelRoot.resolve(settings.outputDirectory()).normalize();
-        if (!outputDirectory.startsWith(levelRoot.normalize())) {
-            throw new IllegalArgumentException("Resource-pack output escapes the world directory");
-        }
-        Path folderTarget = outputDirectory.resolve(settings.name()).normalize();
-        Path zipTarget = outputDirectory.resolve(settings.name() + ".zip").normalize();
+        Path outputDirectory = outputBaseDirectory(levelRoot);
+        String configuredName = settings.name();
+        String zipName = configuredName.toLowerCase(java.util.Locale.ROOT).endsWith(".zip")
+                ? configuredName
+                : configuredName + ".zip";
+        String folderName = zipName.substring(0, zipName.length() - ".zip".length());
+        Path folderTarget = outputDirectory.resolve(folderName).normalize();
+        Path zipTarget = outputDirectory.resolve(zipName).normalize();
         if (!folderTarget.startsWith(outputDirectory) || !zipTarget.startsWith(outputDirectory)) {
             throw new IllegalArgumentException("Resource-pack name escapes the output directory");
         }
@@ -90,6 +92,72 @@ public final class ResourcePackExporter {
                 }
             }
         }
+    }
+
+    /**
+     * Returns the directory in which Minecraft discovers a generated client resource pack.
+     * Minecraft 26.1 moved world-local packs below {@code resourcepacks}; older releases discover
+     * the ZIP directly from the world root.  The same base is used for folder output so that
+     * {@link WtemConfig.ResourcePack.Format#BOTH} always produces matching siblings.
+     */
+    public static Path outputBaseDirectory(Path levelRoot) {
+        Path root = levelRoot.toAbsolutePath().normalize();
+        Path base = usesResourcepacksDirectory() ? root.resolve("resourcepacks") : root;
+        if (!base.normalize().startsWith(root)) {
+            throw new IllegalArgumentException("Resource-pack output escapes the world directory");
+        }
+        return base;
+    }
+
+    private static boolean usesResourcepacksDirectory() {
+        String version = minecraftVersionName();
+        if (version == null || version.isBlank()) return false;
+        int major = -1;
+        int minor = -1;
+        int cursor = 0;
+        while (cursor < version.length() && major < 0) {
+            while (cursor < version.length() && !isAsciiDigit(version.charAt(cursor))) cursor++;
+            int start = cursor;
+            while (cursor < version.length() && isAsciiDigit(version.charAt(cursor))) cursor++;
+            if (start < cursor) major = parseVersionPart(version, start, cursor);
+        }
+        while (cursor < version.length() && minor < 0) {
+            while (cursor < version.length() && !isAsciiDigit(version.charAt(cursor))) cursor++;
+            int start = cursor;
+            while (cursor < version.length() && isAsciiDigit(version.charAt(cursor))) cursor++;
+            if (start < cursor) minor = parseVersionPart(version, start, cursor);
+        }
+        return major > 26 || (major == 26 && minor >= 1);
+    }
+
+    private static int parseVersionPart(String version, int start, int end) {
+        try {
+            return Integer.parseInt(version.substring(start, end));
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    private static boolean isAsciiDigit(char value) {
+        return value >= '0' && value <= '9';
+    }
+
+    private static String minecraftVersionName() {
+        try {
+            SharedConstants.tryDetectVersion();
+            Object version = SharedConstants.getCurrentVersion();
+            for (String methodName : new String[] {"name", "getName"}) {
+                try {
+                    Object value = version.getClass().getMethod(methodName).invoke(version);
+                    if (value instanceof String text) return text;
+                } catch (ReflectiveOperationException ignored) {
+                    // Try the accessor name used by the other mapping generation.
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // Keep the pre-26.1-compatible root fallback when version detection is unavailable.
+        }
+        return null;
     }
 
     private static void writePackContents(

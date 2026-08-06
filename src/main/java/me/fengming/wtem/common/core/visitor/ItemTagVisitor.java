@@ -1,6 +1,5 @@
 package me.fengming.wtem.common.core.visitor;
 
-import me.fengming.wtem.common.Wtem;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.util.ChangeTracker;
@@ -146,26 +145,34 @@ public class ItemTagVisitor implements SimpleTagVisitor {
 
         int bookIndex = TranslationContext.getTypeCounts("writable_book");
         int recordsBefore = TranslationContext.recordCount();
+        boolean hasPlainText = false;
         try (var ignored =
                 TranslationContext.pushKey("writable_book." + bookIndex)) {
             boolean skipFiltered = TranslationContext.config().skipped().filteredText();
             for (int i = 0; i < pages.size(); i++) {
                 CompoundTag page = NbtUtils.getCompound(pages, i);
+                hasPlainText |= !NbtUtils.getString(page, "raw").isBlank();
                 addCatalogPage(page, "raw", "content.page" + i);
                 if (!skipFiltered) {
+                    hasPlainText |= !NbtUtils.getString(page, "filtered").isBlank();
                     addCatalogPage(page, "filtered", "content.page" + i + ".filtered");
+                }
+            }
+            if (hasPlainText) {
+                try (var warningPath = TranslationContext.push("content.pages")) {
+                    TranslationContext.recordWarning(
+                            "writable_book",
+                            "Cataloged "
+                                    + pages.size()
+                                    + " book-and-quill page(s) without rewriting them: writable"
+                                    + " pages are plain strings and cannot hold a translatable"
+                                    + " component");
                 }
             }
         }
         if (TranslationContext.recordCount() == recordsBefore) return;
 
         TranslationContext.increaseTypeCounts("writable_book");
-
-        Wtem.LOGGER.warn(
-                "Cataloged {} pages of a book and quill at {} without rewriting them: writable"
-                        + " pages are plain strings and cannot hold a translatable component",
-                pages.size(),
-                TranslationContext.getKey());
     }
 
     private static void addCatalogPage(CompoundTag page, String field, String keyPath) {
@@ -213,10 +220,24 @@ public class ItemTagVisitor implements SimpleTagVisitor {
                                 true,
                                 "title"));
             }
+            recordPlainWrittenBookString(book, "author");
         }
 
         if (tracker.isChanged()) TranslationContext.increaseTypeCounts("book");
         return tracker.isChanged();
+    }
+
+    private static void recordPlainWrittenBookString(CompoundTag book, String field) {
+        String value = NbtUtils.getString(book, field);
+        if (value.isBlank()) return;
+        try (var ignored = TranslationContext.push(field)) {
+            TranslationContext.recordWarning(
+                    "written_book_string",
+                    "Written-book "
+                            + field
+                            + " is a plain string and remains unchanged; it cannot carry a"
+                            + " translatable component");
+        }
     }
 
     private static boolean handleAttributeModifiers(CompoundTag components) {

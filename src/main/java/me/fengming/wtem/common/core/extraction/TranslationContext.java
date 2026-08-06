@@ -15,6 +15,7 @@ import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.ai.AiKeyNamer;
 import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
 import me.fengming.wtem.common.core.extraction.manifest.ExtractionRecord;
+import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 
 /**
  * @author FengMing
@@ -159,14 +160,14 @@ public final class TranslationContext {
         }
 
         String key;
-        if (state.keyNaming.scheme() == WtemConfig.KeyNaming.Scheme.RANDOM) {
-            key = randomKey(state);
-        } else if (state.keyNaming.scheme() == WtemConfig.KeyNaming.Scheme.AI) {
-            String suggested =
+        switch (state.keyNaming.scheme()) {
+            case RANDOM -> key = randomKey(state);
+            case AI -> {
+                String suggested =
                     state.aiKeyNamer == null ? null : state.aiKeyNamer.suggest(path, value);
-            key = allocateKey(state, suggested == null ? path : suggested);
-        } else {
-            key = allocateKey(state, state.keyNaming.baseKey(path));
+                key = allocateKey(state, suggested == null ? path : suggested);
+            }
+            case null, default -> key = allocateKey(state, state.keyNaming.baseKey(path));
         }
         state.languageEntries.put(key, value);
         if (reuse) state.textToKey.put(value, key);
@@ -241,6 +242,42 @@ public final class TranslationContext {
     /** Installs the run-scoped semantic key provider used by the {@code ai} naming scheme. */
     public static void setAiKeyNamer(AiKeyNamer aiKeyNamer) {
         state().aiKeyNamer = aiKeyNamer;
+    }
+
+    /** Installs the diagnostics sink for warnings emitted by low-level visitors. */
+    public static void setDiagnostics(ExtractionDiagnostics diagnostics) {
+        state().diagnostics = diagnostics;
+    }
+
+    /**
+     * Records a non-fatal warning at the current extraction location.
+     *
+     * <p>Visitors run below resource handlers, so carrying the sink in this thread-local context
+     * keeps their warnings on the same diagnostics stream. The sink is deliberately not part of
+     * transaction rollback: a warning remains useful even when a handler later abandons a
+     * speculative NBT rewrite.
+     */
+    public static void recordWarning(String scope, String message) {
+        ExtractionDiagnostics diagnostics = state().diagnostics;
+        if (diagnostics == null) return;
+        diagnostics.recordWarning(scope, warningLocation(), message);
+    }
+
+    private static String warningLocation() {
+        State state = state();
+        StringBuilder location = new StringBuilder();
+        appendWarningLocation(location, state.origin.source());
+        appendWarningLocation(location, state.origin.location());
+        appendWarningLocation(location, state.origin.subject());
+        String key = currentPath();
+        if (!key.isBlank()) appendWarningLocation(location, "key " + key);
+        return location.isEmpty() ? "unknown" : location.toString();
+    }
+
+    private static void appendWarningLocation(StringBuilder location, String value) {
+        if (value == null || value.isBlank()) return;
+        if (!location.isEmpty()) location.append(" > ");
+        location.append(value);
     }
 
     /** Captures the immutable configuration snapshot used by the current extraction thread. */
@@ -406,6 +443,9 @@ public final class TranslationContext {
         // Shared across transactional copies so caching and the failure circuit breaker apply to
         // the complete extraction run, including entries whose enclosing write is rolled back.
         private AiKeyNamer aiKeyNamer;
+        // Shared across transactional copies so warnings survive a handler transaction that is
+        // later rolled back.
+        private ExtractionDiagnostics diagnostics;
         // Null means that no extraction snapshot has been pinned yet. Keeping this unset is
         // important for direct handler/visitor tests, which install a temporary active config
         // after clearing the context.
@@ -430,6 +470,7 @@ public final class TranslationContext {
             copy.keyReuse = this.keyReuse;
             copy.keyNaming = this.keyNaming;
             copy.aiKeyNamer = this.aiKeyNamer;
+            copy.diagnostics = this.diagnostics;
             copy.config = this.config;
             copy.random = this.random;
             return copy;

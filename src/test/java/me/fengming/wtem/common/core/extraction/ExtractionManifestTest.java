@@ -104,7 +104,7 @@ class ExtractionManifestTest {
         String csv = ExtractionManifest.render(List.of(record("a.b", "c", false)));
 
         assertTrue(csv.endsWith("\r\n"), csv);
-        assertEquals(2, csv.split("\r\n").length, csv);
+        assertEquals(2, csv.lines().count(), csv);
         // A lone LF anywhere else would be text carried by a field, and there is none here.
         assertEquals(csv.replace("\r\n", ""), csv.replace("\r", "").replace("\n", ""));
     }

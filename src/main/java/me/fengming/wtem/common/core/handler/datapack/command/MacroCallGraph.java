@@ -20,6 +20,7 @@ import java.util.Set;
  * @author FengMing
  */
 final class MacroCallGraph {
+    private static final int MAX_BINDINGS_PER_CALL = 10_000;
     private final Map<String, Set<String>> macrosByFunction;
     private final Map<String, Map<String, Set<String>>> valuesByFunction;
     private final Map<String, List<Map<String, String>>> bindingsByFunction;
@@ -72,6 +73,7 @@ final class MacroCallGraph {
             Map<String, String> sources,
             InvocationParser invocationParser,
             StorageAssignmentParser storageAssignmentParser) {
+        sources = sources == null ? Map.of() : sources;
         Map<String, Set<String>> macros = new LinkedHashMap<>();
         Map<String, Set<String>> callers = new LinkedHashMap<>();
         Map<String, List<Map<String, String>>> storage = new LinkedHashMap<>();
@@ -122,6 +124,14 @@ final class MacroCallGraph {
             }
         }
 
+        // A macro caller often prepares its storage in another function first:
+        // `show_activity -> request/load_names -> activity_idle_dynamic`.  The first index above
+        // deliberately remains a cheap same-function scan for compatibility, but it cannot see
+        // those ordered effects.  Replay every function with a symbolic storage environment so a
+        // call site receives the values that were written by its preceding function calls too.
+        addDataflowInvocations(
+                sources, macros, invocationParser, storageAssignmentParser, invocations, callers);
+
         Map<String, Map<String, Set<String>>> values = new LinkedHashMap<>();
         Map<String, List<Map<String, String>>> bindings = new LinkedHashMap<>();
         Set<String> unresolved = new LinkedHashSet<>();
@@ -135,11 +145,22 @@ final class MacroCallGraph {
                                 storage,
                                 invocation.storageId(),
                                 invocation.path(),
-                                false);
+                        false);
             }
-            if (candidates.isEmpty()) candidates = List.of(Map.of());
+            if (candidates.isEmpty()) {
+                for (String macro : targetMacros) {
+                    unresolved.add(invocation.target() + "|" + macro);
+                }
+                continue;
+            }
 
             for (Map<String, String> fields : candidates) {
+                if (fields == null || fields.isEmpty()) {
+                    for (String macro : targetMacros) {
+                        unresolved.add(invocation.target() + "|" + macro);
+                    }
+                    continue;
+                }
                 Map<String, String> binding = new LinkedHashMap<>();
                 for (String macro : targetMacros) {
                     String value = fields.get(macro);
@@ -181,6 +202,220 @@ final class MacroCallGraph {
                 (function, functionBindings) ->
                         immutableBindings.put(function, List.copyOf(functionBindings)));
         return new MacroCallGraph(macros, values, immutableBindings, callers, unresolved);
+    }
+
+    private static void addDataflowInvocations(
+            Map<String, String> sources,
+            Map<String, Set<String>> macros,
+            InvocationParser invocationParser,
+            StorageAssignmentParser storageAssignmentParser,
+            List<Invocation> invocations,
+            Map<String, Set<String>> callers) {
+        if (invocationParser == null) return;
+
+        Map<String, List<ProgramCommand>> programs = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : sources.entrySet()) {
+            String function = normalizeFunctionId(entry.getKey());
+            String source = entry.getValue() == null ? "" : entry.getValue();
+            List<String> physicalLines = FunctionSource.parse(source).lines();
+            List<ProgramCommand> commands = new ArrayList<>();
+            for (int lineIndex = 0; lineIndex < physicalLines.size(); lineIndex++) {
+                FunctionSource.LogicalCommand logical =
+                        FunctionSource.LogicalCommand.read(physicalLines, lineIndex);
+                lineIndex = logical.lastLineIndex();
+                String line = logical.value();
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
+
+                StorageAssignment assignment =
+                        storageAssignmentParser == null
+                                ? null
+                                : storageAssignmentParser.parse(line);
+                ParsedInvocation invocation = invocationParser.parse(line);
+                if (assignment != null || invocation != null) {
+                    commands.add(
+                            new ProgramCommand(
+                                    assignment, invocation, conditionClauses(line)));
+                }
+            }
+            programs.put(function, List.copyOf(commands));
+        }
+
+        // Start at the immediate callers of macro functions.  The values needed by a macro are
+        // defined immediately before that call in normal datapacks (often by a small loader
+        // function); starting at pack roots such as `tick` would replay the entire game graph and
+        // mix unrelated runtime states into one static binding set.
+        Set<String> roots = new LinkedHashSet<>();
+        for (Map.Entry<String, List<ProgramCommand>> entry : programs.entrySet()) {
+            if (entry.getValue().stream()
+                    .map(ProgramCommand::invocation)
+                    .filter(java.util.Objects::nonNull)
+                    .map(invocation -> normalizeFunctionId(invocation.target()))
+                    .anyMatch(target -> !macros.getOrDefault(target, Set.of()).isEmpty())) {
+                roots.add(entry.getKey());
+            }
+        }
+
+        for (String root : roots) {
+            executeFunction(
+                    root,
+                    programs,
+                    macros,
+                    new StorageEnvironment(),
+                    List.of(),
+                    new LinkedHashSet<>(),
+                    invocations,
+                    callers);
+        }
+    }
+
+    private static void executeFunction(
+            String function,
+            Map<String, List<ProgramCommand>> programs,
+            Map<String, Set<String>> macros,
+            StorageEnvironment environment,
+            List<Predicate> inheritedConditions,
+            Set<String> activeFunctions,
+            List<Invocation> invocations,
+            Map<String, Set<String>> callers) {
+        String normalized = normalizeFunctionId(function);
+        List<ProgramCommand> commands = programs.get(normalized);
+        if (commands == null || !activeFunctions.add(normalized)) return;
+
+        for (ProgramCommand command : commands) {
+            List<Predicate> conditions =
+                    combineConditions(inheritedConditions, command.conditions());
+            if (command.assignment() != null) {
+                environment.add(command.assignment(), conditions);
+            }
+
+            ParsedInvocation invocation = command.invocation();
+            if (invocation == null) continue;
+
+            List<Map<String, String>> callerValues =
+                    invocation.storageId() == null
+                            ? List.of()
+                            : snapshotBindings(
+                                    environment,
+                                    invocation,
+                                    conditions,
+                                    macros.getOrDefault(
+                                            normalizeFunctionId(invocation.target()), Set.of()));
+            addInvocation(
+                    invocations,
+                    callers,
+                    normalized,
+                    invocation,
+                    callerValues);
+
+            // Functions without `with storage` are still important: they commonly populate the
+            // storage that the next command passes to a macro.  A called function may also contain
+            // another `with storage` call, so recurse for both forms.  The active set prevents
+            // recursive datapack functions from making the static pass diverge.
+            executeFunction(
+                    invocation.target(),
+                    programs,
+                    macros,
+                    environment,
+                    conditions,
+                    activeFunctions,
+                    invocations,
+                    callers);
+        }
+        activeFunctions.remove(normalized);
+    }
+
+    private static List<Map<String, String>> snapshotBindings(
+            StorageEnvironment environment,
+            ParsedInvocation invocation,
+            List<Predicate> invocationConditions,
+            Set<String> targetMacros) {
+        String storageId = invocation.storageId();
+        String basePath = invocation.path() == null ? "" : invocation.path();
+        if (targetMacros.isEmpty()) return List.of();
+
+        Map<String, List<ValueCandidate>> candidates = new LinkedHashMap<>();
+        for (String macro : targetMacros) {
+            List<ValueCandidate> values =
+                    environment.candidates(storageId, basePath, macro, invocationConditions);
+            if (values.isEmpty() && macro.equals(lastPathSegment(basePath))) {
+                values =
+                        environment.candidates(
+                                storageId, basePath, "$value", invocationConditions);
+            }
+            if (!values.isEmpty()) candidates.put(macro, values);
+        }
+        if (candidates.isEmpty()) return List.of();
+
+        List<String> fields = new ArrayList<>(candidates.keySet());
+        List<Map<String, String>> result = new ArrayList<>();
+        collectBindings(
+                candidates,
+                fields,
+                0,
+                new LinkedHashMap<>(),
+                new LinkedHashMap<>(),
+                result);
+        return List.copyOf(result);
+    }
+
+    private static void collectBindings(
+            Map<String, List<ValueCandidate>> candidates,
+            List<String> fields,
+            int index,
+            Map<String, String> binding,
+            Map<String, ValueCandidate> selected,
+            List<Map<String, String>> result) {
+        if (index >= fields.size()) {
+            if (!binding.isEmpty() && !result.contains(binding)) {
+                result.add(Map.copyOf(binding));
+            }
+            return;
+        }
+
+        String field = fields.get(index);
+        for (ValueCandidate candidate : candidates.getOrDefault(field, List.of())) {
+            if (!compatibleWithSelected(candidate, field, selected, candidates)) continue;
+            binding.put(field, candidate.value());
+            selected.put(field, candidate);
+            collectBindings(candidates, fields, index + 1, binding, selected, result);
+            selected.remove(field);
+            binding.remove(field);
+            if (result.size() >= MAX_BINDINGS_PER_CALL) return;
+        }
+    }
+
+    private static boolean compatibleWithSelected(
+            ValueCandidate candidate,
+            String field,
+            Map<String, ValueCandidate> selected,
+            Map<String, List<ValueCandidate>> candidates) {
+        for (ValueCandidate other : selected.values()) {
+            if (!conditionsCompatible(candidate.conditions(), other.conditions())) return false;
+        }
+
+        // Conditional storage setup normally writes a related group in separate commands, for
+        // example req1_name and req1_color under the same score predicate.  If another field has a
+        // candidate from that exact group, selecting its default/other group would create an
+        // impossible name/color pair.  Independent score predicates remain combinable.
+        String group = candidate.conditionKey();
+        for (Map.Entry<String, ValueCandidate> entry : selected.entrySet()) {
+            if (group.isBlank()) {
+                String selectedGroup = entry.getValue().conditionKey();
+                if (!selectedGroup.isBlank()
+                        && !entry.getKey().equals(field)
+                        && candidates.getOrDefault(field, List.of()).stream()
+                                .anyMatch(value -> selectedGroup.equals(value.conditionKey()))) {
+                    return false;
+                }
+            } else if (!entry.getKey().equals(field)
+                    && candidates.getOrDefault(entry.getKey(), List.of()).stream()
+                            .anyMatch(value -> group.equals(value.conditionKey()))
+                    && !group.equals(entry.getValue().conditionKey())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void addInvocation(
@@ -308,6 +543,269 @@ final class MacroCallGraph {
             if (!relative.isEmpty()) result.put(relative, field.getValue());
         }
         return Map.copyOf(result);
+    }
+
+    private static List<Predicate> combineConditions(
+            List<Predicate> inherited, List<Predicate> local) {
+        List<Predicate> result = new ArrayList<>(inherited);
+        for (Predicate predicate : local) {
+            if (!result.contains(predicate)) result.add(predicate);
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean compatible(
+            List<Predicate> left, List<Predicate> right) {
+        return conditionsCompatible(left, right);
+    }
+
+    private static boolean conditionsCompatible(
+            List<Predicate> left, List<Predicate> right) {
+        for (Predicate first : left) {
+            for (Predicate second : right) {
+                if (!first.compatible(second)) return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Extracts the execute prefix without interpreting the command that follows {@code run}.
+     * The prefix is only a correlation hint for static values; Brigadier remains the authority for
+     * command syntax and SNBT parsing.
+     */
+    private static List<Predicate> conditionClauses(String line) {
+        String trimmed = line == null ? "" : line.trim();
+        if (!trimmed.startsWith("execute ")) return List.of();
+
+        int run = executeRunIndex(trimmed);
+        if (run < 0) return List.of();
+        String prefix = trimmed.substring("execute ".length(), run).trim();
+        if (prefix.isEmpty()) return List.of();
+
+        List<String> tokens = commandTokens(prefix);
+        List<Predicate> result = new ArrayList<>();
+        int start = 0;
+        for (int i = 0; i <= tokens.size(); i++) {
+            if (i < tokens.size()
+                    && !"if".equals(tokens.get(i))
+                    && !"unless".equals(tokens.get(i))) {
+                continue;
+            }
+            if (i > start) result.add(Predicate.parse(String.join(" ", tokens.subList(start, i))));
+            start = i;
+        }
+        if (result.isEmpty()) result.add(Predicate.parse(prefix));
+        return List.copyOf(result);
+    }
+
+    private static int executeRunIndex(String command) {
+        char quote = 0;
+        boolean escaped = false;
+        int squareDepth = 0;
+        int compoundDepth = 0;
+        for (int i = 0; i < command.length() - 4; i++) {
+            char character = command.charAt(i);
+            if (quote != 0) {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = 0;
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+                continue;
+            }
+            if (character == '[') squareDepth++;
+            else if (character == ']') squareDepth = Math.max(0, squareDepth - 1);
+            else if (character == '{') compoundDepth++;
+            else if (character == '}') compoundDepth = Math.max(0, compoundDepth - 1);
+            if (squareDepth == 0 && compoundDepth == 0
+                    && command.startsWith(" run ", i)) return i;
+        }
+        return -1;
+    }
+
+    /** Splits command clauses without breaking quoted or structured arguments. */
+    private static List<String> commandTokens(String command) {
+        if (command == null || command.isBlank()) return List.of();
+        List<String> tokens = new ArrayList<>();
+        int start = -1;
+        int squareDepth = 0;
+        int compoundDepth = 0;
+        char quote = 0;
+        boolean escaped = false;
+        for (int i = 0; i < command.length(); i++) {
+            char character = command.charAt(i);
+            if (quote != 0) {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = 0;
+            } else if (character == '\'' || character == '"') {
+                quote = character;
+            } else if (character == '[') {
+                squareDepth++;
+            } else if (character == ']') {
+                squareDepth = Math.max(0, squareDepth - 1);
+            } else if (character == '{') {
+                compoundDepth++;
+            } else if (character == '}') {
+                compoundDepth = Math.max(0, compoundDepth - 1);
+            }
+
+            if (Character.isWhitespace(character)
+                    && quote == 0
+                    && squareDepth == 0
+                    && compoundDepth == 0) {
+                if (start >= 0) {
+                    tokens.add(command.substring(start, i));
+                    start = -1;
+                }
+            } else if (start < 0) {
+                start = i;
+            }
+        }
+        if (start >= 0) tokens.add(command.substring(start));
+        return List.copyOf(tokens);
+    }
+
+    private static String joinPath(String base, String child) {
+        String first = base == null ? "" : base.trim();
+        String second = child == null ? "" : child.trim();
+        if (first.isEmpty()) return second;
+        if (second.isEmpty()) return first;
+        return first + "." + second;
+    }
+
+    private static final class StorageEnvironment {
+        private final Map<String, List<Write>> writes = new LinkedHashMap<>();
+
+        void add(StorageAssignment assignment, List<Predicate> conditions) {
+            if (assignment == null
+                    || assignment.storageId() == null
+                    || assignment.values() == null) return;
+
+            for (Map.Entry<String, String> entry : assignment.values().entrySet()) {
+                String relative = "$value".equals(entry.getKey()) ? "" : entry.getKey();
+                String path = joinPath(assignment.path(), relative);
+                Write write =
+                        new Write(
+                                assignment.storageId(),
+                                path,
+                                entry.getValue(),
+                                List.copyOf(conditions));
+                List<Write> values = writes.computeIfAbsent(assignment.storageId(), ignored -> new ArrayList<>());
+                if (!values.contains(write)) values.add(write);
+            }
+        }
+
+        List<ValueCandidate> candidates(
+                String storageId,
+                String basePath,
+                String field,
+                List<Predicate> invocationConditions) {
+            String wanted = "$value".equals(field) ? basePath : joinPath(basePath, field);
+            List<ValueCandidate> result = new ArrayList<>();
+            for (Write write : writes.getOrDefault(storageId, List.of())) {
+                if (!write.path().equals(wanted)) continue;
+                if (!compatible(write.conditions(), invocationConditions)) continue;
+                ValueCandidate candidate = new ValueCandidate(write.value(), write.conditions());
+                if (!result.contains(candidate)) result.add(candidate);
+            }
+            return List.copyOf(result);
+        }
+    }
+
+    private record ProgramCommand(
+            StorageAssignment assignment,
+            ParsedInvocation invocation,
+            List<Predicate> conditions) {}
+
+    private record Write(
+            String storageId,
+            String path,
+            String value,
+            List<Predicate> conditions) {}
+
+    private record ValueCandidate(String value, List<Predicate> conditions) {
+        String conditionKey() {
+            return conditions.stream().map(Predicate::text).reduce((left, right) -> left + " && " + right).orElse("");
+        }
+    }
+
+    private record Predicate(
+            String text,
+            String domain,
+            boolean negated,
+            boolean score,
+            long minimum,
+            long maximum) {
+        static Predicate parse(String raw) {
+            List<String> tokens = commandTokens(raw);
+            String text = String.join(" ", tokens);
+            boolean negated = !tokens.isEmpty() && "unless".equals(tokens.getFirst());
+            if (tokens.size() >= 5 && "score".equals(tokens.get(1))) {
+                String domain = "score:" + tokens.get(2) + ":" + tokens.get(3);
+                int matches = -1;
+                for (int i = 4; i < tokens.size(); i++) {
+                    if ("matches".equals(tokens.get(i)) && i + 1 < tokens.size()) {
+                        matches = i + 1;
+                        break;
+                    }
+                }
+                if (matches >= 0) {
+                    long[] range = parseRange(tokens.get(matches));
+                    return new Predicate(text, domain, negated, true, range[0], range[1]);
+                }
+                return new Predicate(text, domain, negated, true, Long.MIN_VALUE, Long.MAX_VALUE);
+            }
+            String domain =
+                    tokens.size() > 1
+                            ? tokens.getFirst() + ":" + String.join(" ", tokens.subList(1, tokens.size()))
+                            : text;
+            return new Predicate(text, domain, negated, false, Long.MIN_VALUE, Long.MAX_VALUE);
+        }
+
+        boolean compatible(Predicate other) {
+            if (!domain.equals(other.domain)) return true;
+            if (!score || !other.score) return text.equals(other.text);
+            if (!negated && !other.negated) {
+                return rangesOverlap(minimum, maximum, other.minimum, other.maximum);
+            }
+            if (negated && other.negated) return true;
+            Predicate positive = negated ? other : this;
+            Predicate negative = negated ? this : other;
+            if (positive.minimum == Long.MIN_VALUE || positive.maximum == Long.MAX_VALUE) return true;
+            return positive.minimum < negative.minimum
+                    || positive.maximum > negative.maximum;
+        }
+
+        private static long[] parseRange(String value) {
+            try {
+                int separator = value.indexOf("..");
+                if (separator >= 0) {
+                    String minimumText = value.substring(0, separator);
+                    String maximumText = value.substring(separator + 2);
+                    long minimum =
+                            minimumText.isEmpty()
+                                    ? Long.MIN_VALUE
+                                    : Long.parseLong(minimumText);
+                    long maximum =
+                            maximumText.isEmpty()
+                                    ? Long.MAX_VALUE
+                                    : Long.parseLong(maximumText);
+                    return new long[] {minimum, maximum};
+                }
+                long exact = Long.parseLong(value);
+                return new long[] {exact, exact};
+            } catch (NumberFormatException ignored) {
+                return new long[] {Long.MIN_VALUE, Long.MAX_VALUE};
+            }
+        }
+
+        private static boolean rangesOverlap(long firstMin, long firstMax, long secondMin, long secondMax) {
+            return firstMin <= secondMax && secondMin <= firstMax;
+        }
     }
 
     private static String normalizeFunctionId(String id) {
