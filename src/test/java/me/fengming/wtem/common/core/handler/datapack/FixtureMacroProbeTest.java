@@ -34,6 +34,9 @@ class FixtureMacroProbeTest {
 
     @BeforeAll
     static void bootstrapMinecraft() throws IOException {
+        assumeTrue(
+                FIXTURE != null,
+                "Skipping the real-world macro fixture: tools/testdatpack is not available");
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
         SOURCES.putAll(readFunctions());
@@ -303,7 +306,7 @@ class FixtureMacroProbeTest {
             if (Files.isDirectory(candidate)) return candidate;
             current = current.getParent();
         }
-        throw new IllegalStateException("Could not find tools/testdatpack fixture");
+        return null;
     }
 
     private static boolean isTargetFixtureVersion() {
