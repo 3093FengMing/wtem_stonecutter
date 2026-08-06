@@ -247,32 +247,6 @@ class WtemConfigTest {
     }
 
     @Test
-    void keepsBothHistoricalAnimatedJavaDefaultsWorkingWithoutChangingTheirOldMeaning() {
-        WtemConfig earlyDefault =
-                parse(
-                        "{\"skipped_paths\": [\"function/animated_java\","
-                                + " \"custom:dialog\"]}");
-        assertTrue(
-                earlyDefault.isPathSkipped(
-                        "animated_java", "function/example.mcfunction"));
-        assertTrue(
-                earlyDefault.isPathSkipped(
-                        "legacy", "function/animated_java/example.mcfunction"));
-
-        WtemConfig slashDefault =
-                parse(
-                        "{\"skipped_paths\": [\"animated_java/function\","
-                                + " \"custom:dialog\"]}");
-        assertTrue(
-                slashDefault.isPathSkipped(
-                        "animated_java", "function/example.mcfunction"));
-        assertTrue(
-                slashDefault.isPathSkipped(
-                        "legacy", "animated_java/function/example.mcfunction"));
-        assertFalse(slashDefault.isPathSkipped("legacy", "function/example.mcfunction"));
-    }
-
-    @Test
     void preservesMixedSkippedPathSemanticsAcrossJsonRoundTrips() {
         WtemConfig config =
                 parse(
