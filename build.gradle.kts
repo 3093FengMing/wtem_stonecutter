@@ -59,7 +59,7 @@ dependencies {
     // aggregate dependency also supplies the resource loader required by YACL 3.9 on 26.x.
     modImplementation("net.fabricmc.fabric-api:fabric-api:${sc.properties["deps.fabric_api"] as String}")
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.2")
 }
 
 loom {
