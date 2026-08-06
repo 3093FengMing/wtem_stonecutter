@@ -12,7 +12,7 @@ import me.fengming.wtem.common.Wtem;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
-import me.fengming.wtem.common.core.extraction.service.VanillaSavedDataFiles;
+import me.fengming.wtem.common.core.extraction.VanillaSavedDataFiles;
 import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
 import me.fengming.wtem.common.util.ResourceIo;

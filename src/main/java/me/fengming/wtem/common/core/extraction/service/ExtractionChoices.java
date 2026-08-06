@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import me.fengming.wtem.common.Wtem;
+import me.fengming.wtem.common.core.extraction.VanillaSavedDataFiles;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.WorldStem;
 import net.minecraft.server.packs.PackResources;

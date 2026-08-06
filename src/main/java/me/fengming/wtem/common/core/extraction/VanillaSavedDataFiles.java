@@ -1,4 +1,4 @@
-package me.fengming.wtem.common.core.extraction.service;
+package me.fengming.wtem.common.core.extraction;
 
 import java.util.Locale;
 import java.util.Set;
@@ -17,23 +17,12 @@ import java.util.Set;
  */
 public final class VanillaSavedDataFiles {
     private static final Set<String> VANILLA_FILE_NAMES =
-            Set.of(
-                    "chunks.dat",
-                    "scoreboard.dat",
-                    "custom_boss_events.dat",
-                    "raids.dat",
-                    "raids_end.dat",
-                    "idcounts.dat",
-                    "random_sequences.dat",
-                    "structure_feature_indices.dat",
-                    "structures.dat",
-                    "game_rules.dat",
-                    "scheduled_events.dat",
-                    "stopwatches.dat",
-                    "wandering_trader.dat",
-                    "weather.dat",
-                    "world_clocks.dat",
-                    "world_gen_settings.dat");
+            Set.of("chunks.dat", "scoreboard.dat", "custom_boss_events.dat",
+                "raids.dat", "raids_end.dat", "idcounts.dat",
+                "random_sequences.dat", "structure_feature_indices.dat",
+                "structures.dat", "game_rules.dat", "scheduled_events.dat",
+                "stopwatches.dat", "wandering_trader.dat", "weather.dat",
+                "world_clocks.dat", "world_gen_settings.dat");
 
     private VanillaSavedDataFiles() {}
 
