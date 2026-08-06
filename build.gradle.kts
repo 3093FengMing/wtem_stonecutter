@@ -159,7 +159,7 @@ val releaseType: ReleaseType = when {
  */
 val changelogText: String = providers.environmentVariable("CHANGELOG").orNull
     ?.takeIf { it.isNotBlank() }
-    ?: "See https://github.com/${publishProperty("github_repo")}/releases/tag/v$modVersion"
+    ?: "See https://github.com/${publishProperty("github_repo")}/releases/tag/$modVersion"
 
 publishMods {
     file = loomx.modJar.flatMap { it.archiveFile }
