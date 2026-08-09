@@ -1,9 +1,6 @@
 package me.fengming.wtem.common.core.handler.datapack.command;
 
 import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
 import com.mojang.brigadier.ParseResults;
 import com.mojang.brigadier.context.CommandContextBuilder;
 import com.mojang.brigadier.context.ParsedArgument;
@@ -138,18 +135,21 @@ final class CommandParseSupport {
         }
         if (!functionNode || name == null) return null;
 
-        String target = argumentText(command, name);
+        String target = CommandArgumentSupport.argumentText(command, name);
         ParsedArgument<CommandSourceStack, ?> storageArgument =
-                findArgument(rootContext, "source", "storage", "storageId");
-        ParsedArgument<CommandSourceStack, ?> pathArgument = findArgument(rootContext, "path");
+                CommandArgumentSupport.findArgument(rootContext, "source", "storage", "storageId");
+        ParsedArgument<CommandSourceStack, ?> pathArgument =
+                CommandArgumentSupport.findArgument(rootContext, "path");
         if (storageArgument == null) {
             return new MacroCallGraph.ParsedInvocation(target, null, null);
         }
 
         return new MacroCallGraph.ParsedInvocation(
                 target,
-                argumentText(command, storageArgument),
-                pathArgument == null ? null : argumentText(command, pathArgument));
+                CommandArgumentSupport.argumentText(command, storageArgument),
+                pathArgument == null
+                        ? null
+                        : CommandArgumentSupport.argumentText(command, pathArgument));
     }
 
     static MacroCallGraph.ParsedInvocation parseFunctionInvocation(String sourceLine) {
@@ -182,35 +182,38 @@ final class CommandParseSupport {
         if (results.getReader().canRead()) return null;
 
         CommandContextBuilder<CommandSourceStack> context = results.getContext();
-        boolean modify = containsCommandNode(context, "modify");
-        boolean merge = containsCommandNode(context, "merge");
-        if (!containsCommandNode(context, "data") || (!modify && !merge)) return null;
+        boolean modify = CommandArgumentSupport.containsCommandNode(context, "modify");
+        boolean merge = CommandArgumentSupport.containsCommandNode(context, "merge");
+        if (!CommandArgumentSupport.containsCommandNode(context, "data")
+                || (!modify && !merge)) return null;
         // Only `data modify ... set value` replaces a path with this exact literal. Treating
         // append/prepend/insert/merge as an assignment would feed a value into a caller that never
         // actually receives that shape. `data merge storage ...` is the separate root merge form.
         if (modify
-                && (!containsCommandNode(context, "set")
-                        || !containsCommandNode(context, "value"))) {
+                && (!CommandArgumentSupport.containsCommandNode(context, "set")
+                        || !CommandArgumentSupport.containsCommandNode(context, "value"))) {
             return null;
         }
 
-        ParsedArgument<CommandSourceStack, ?> target = findArgument(context, "target");
-        ParsedArgument<CommandSourceStack, ?> path = findArgument(context, "path", "targetPath");
+        ParsedArgument<CommandSourceStack, ?> target =
+                CommandArgumentSupport.findArgument(context, "target");
+        ParsedArgument<CommandSourceStack, ?> path =
+                CommandArgumentSupport.findArgument(context, "path", "targetPath");
         ParsedArgument<CommandSourceStack, ?> value =
-                findArgument(context, "value", "nbt", "tag");
+                CommandArgumentSupport.findArgument(context, "value", "nbt", "tag");
         if (target == null || value == null) return null;
 
-        String storageId = storageId(command, target);
+        String storageId = CommandArgumentSupport.storageId(command, target);
         if (storageId == null || storageId.isBlank()) return null;
 
         Object parsedValue = value.getResult();
         if (!(parsedValue instanceof Tag tag)) return null;
-        Map<String, String> values = storageValues(tag);
+        Map<String, String> values = CommandArgumentSupport.storageValues(tag);
         if (values.isEmpty()) return null;
 
         return new MacroCallGraph.StorageAssignment(
                 storageId,
-                path == null ? "" : argumentText(command, path),
+                path == null ? "" : CommandArgumentSupport.argumentText(command, path),
                 Map.copyOf(values));
     }
 
@@ -221,14 +224,15 @@ final class CommandParseSupport {
     /** Records a warning for a literal string written directly into command storage. */
     private static void recordBareStorageStringWarning(
             String command, CommandContextBuilder<CommandSourceStack> context) {
-        if (!containsCommandNode(context, "data")
-                || !containsCommandNode(context, "modify")
-                || !containsCommandNode(context, "storage")
-                || !containsCommandNode(context, "set")
-                || !containsCommandNode(context, "value")) {
+        if (!CommandArgumentSupport.containsCommandNode(context, "data")
+                || !CommandArgumentSupport.containsCommandNode(context, "modify")
+                || !CommandArgumentSupport.containsCommandNode(context, "storage")
+                || !CommandArgumentSupport.containsCommandNode(context, "set")
+                || !CommandArgumentSupport.containsCommandNode(context, "value")) {
             return;
         }
-        ParsedArgument<CommandSourceStack, ?> value = findArgument(context, "value", "nbt", "tag");
+        ParsedArgument<CommandSourceStack, ?> value =
+                CommandArgumentSupport.findArgument(context, "value", "nbt", "tag");
         if (value == null || !(value.getResult() instanceof StringTag)) return;
         recordCommandWarning(
                 "function_storage_string",
@@ -361,15 +365,15 @@ final class CommandParseSupport {
                         Set<String> catalogKeysBefore = TranslationContext.snapshot().keySet();
                         MacroArgumentRestorer.Replacement replacement =
                                         createReplacement(
-                                        parsedCommand.text(),
-                                        context,
-                                        entry.getKey(),
-                                        argument,
-                                        argumentStart,
-                                        argumentEnd,
-                                        sourceArgument,
-                                        line.materializedArgument(argumentStart, argumentEnd),
-                                        parser.registries());
+                                            parsedCommand.text(),
+                                            context,
+                                            entry.getKey(),
+                                            argument,
+                                            argumentStart,
+                                            argumentEnd,
+                                            sourceArgument,
+                                            line.materializedArgument(argumentStart, argumentEnd),
+                                            parser.registries());
                         if (replacement == null) {
                             if (TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
                                 transaction.commit();
@@ -645,16 +649,16 @@ final class CommandParseSupport {
             MacroArgumentRestorer.CommandLine line,
             List<MacroArgumentRestorer.Replacement> replacements) {
         return line.macro()
-                && isJsonComponentCommand(line.source())
+                && CommandJsonSupport.isComponentCommand(line.source())
                 && replacements.stream()
                 .anyMatch(replacement -> replacement.value().contains("\"translate\""));
     }
 
     /** Validates the JSON component subtree after replacements have been rendered to source. */
     static boolean isSafeGeneratedCommand(String command) {
-        JsonRange range = locateComponentJson(command);
+        var range = CommandJsonSupport.locateComponentJson(command);
         if (range == null) return true;
-        return parseJsonWithBareComponentMacros(
+        return CommandJsonSupport.parseWithBareComponentMacros(
                         command.substring(range.start(), range.end()))
                 .isPresent();
     }
@@ -689,7 +693,7 @@ final class CommandParseSupport {
 
         switch (value) {
             case Component component -> {
-                Optional<JsonElement> sourceJson = parseJson(sourceArgument);
+                Optional<JsonElement> sourceJson = CommandJsonSupport.parse(sourceArgument);
                 if (sourceJson.isPresent()) {
                     JsonElement translated = TranslationUtils.translateLiteral(sourceJson.get());
                     if (translated == sourceJson.get()) return null;
@@ -706,12 +710,12 @@ final class CommandParseSupport {
                 // validated this tree, but its canonical encoder intentionally drops unknown fields
                 // such as datapack-defined `description`.  Those fields are still component-bearing
                 // text and must remain available to the schema-neutral translator.
-                var encoded = parseJson(materializedArgument).orElseGet(
+                var encoded = CommandJsonSupport.parse(materializedArgument).orElseGet(
                         () ->
                                 Dialog.DIRECT_CODEC
                                         .encodeStart(JsonOps.INSTANCE, dialog)
                                         .getOrThrow(IllegalStateException::new));
-                var source = parseJson(sourceArgument).orElse(encoded);
+                var source = CommandJsonSupport.parse(sourceArgument).orElse(encoded);
                 var translated = TranslationUtils.translateDecodedTree(source);
                 if (translated == source) return null;
                 replacement = translated.toString();
@@ -729,11 +733,12 @@ final class CommandParseSupport {
                                 .orElse(null);
                 if (replacement == null) return null;
             }
-            case CompoundTag compound when containsCommandNode(context, "summon") -> {
+            case CompoundTag compound
+                    when CommandArgumentSupport.containsCommandNode(context, "summon") -> {
                 CompoundTag translatedTag = compound.copy();
                 boolean temporaryId = !translatedTag.contains("id");
                 if (temporaryId) {
-                    findEntityId(context, command)
+                    CommandArgumentSupport.findEntityId(context, command)
                             .ifPresent(id -> translatedTag.putString("id", id));
                 }
                 EntityTagVisitor entityVisitor = new EntityTagVisitor();
@@ -849,10 +854,11 @@ final class CommandParseSupport {
             CommandContextBuilder<CommandSourceStack> context, String argumentName) {
         // The guard is intentionally command-shape based rather than a generic CompoundTag rule:
         // item/block/entity payloads have richer schema visitors and must not enter this heuristic.
-        if (containsCommandNode(context, "data")) {
-            return containsCommandNode(context, "merge") && containsCommandNode(context, "entity");
+        if (CommandArgumentSupport.containsCommandNode(context, "data")) {
+            return CommandArgumentSupport.containsCommandNode(context, "merge")
+                    && CommandArgumentSupport.containsCommandNode(context, "entity");
         }
-        return containsCommandNode(context, "function");
+        return CommandArgumentSupport.containsCommandNode(context, "function");
     }
 
     /**
@@ -868,21 +874,23 @@ final class CommandParseSupport {
      */
     private static MacroArgumentRestorer.Replacement findMacroArgumentReplacement(
             MacroArgumentRestorer.CommandLine line) {
-        if (!isJsonComponentCommand(line.source())) return null;
-        JsonRange materialized = locateComponentJson(line.text());
+        if (!CommandJsonSupport.isComponentCommand(line.source())) return null;
+        var materialized = CommandJsonSupport.locateComponentJson(line.text());
         if (materialized == null) return null;
 
         Optional<JsonElement> materializedJson =
-                parseJson(line.text().substring(materialized.start(), materialized.end()));
+                CommandJsonSupport.parse(
+                        line.text().substring(materialized.start(), materialized.end()));
         Optional<JsonElement> sourceJson =
-                parseJson(line.translationArgument(materialized.start(), materialized.end()));
+                CommandJsonSupport.parse(
+                        line.translationArgument(materialized.start(), materialized.end()));
         if (materializedJson.isEmpty() || sourceJson.isEmpty()) return null;
 
         try (var transaction = TranslationContext.beginTransaction()) {
             // Parsing the materialized value verifies that the candidate is balanced JSON. The
             // source tree deliberately keeps unresolved macros so text fields can become `with`
             // arguments instead of leaking the internal stand-in into the language catalog.
-            JsonElement translated = looksLikeDialogSchema(sourceJson.get())
+            JsonElement translated = CommandJsonSupport.looksLikeDialogSchema(sourceJson.get())
                     ? TranslationUtils.translateDecodedTree(sourceJson.get())
                     : TranslationUtils.translateLiteral(sourceJson.get());
             if (translated == sourceJson.get()) return null;
@@ -894,195 +902,17 @@ final class CommandParseSupport {
         }
     }
 
-    private static boolean looksLikeDialogSchema(JsonElement json) {
-        if (json == null || !json.isJsonObject()) return false;
-        JsonObject object = json.getAsJsonObject();
-        return object.has("type")
-                && object.get("type").isJsonPrimitive()
-                && object.get("type").getAsJsonPrimitive().isString()
-                && object.get("type").getAsString().contains(":");
-    }
-
-    private static boolean isJsonComponentCommand(String source) {
-        String command = source == null ? "" : source.trim();
-        if (command.startsWith("$")) command = command.substring(1);
-        return command.contains(" dialog show ")
-                || command.startsWith("dialog show ")
-                || command.contains(" title ")
-                || command.contains(" subtitle ")
-                || command.contains(" actionbar ")
-                || command.contains(" tellraw ")
-                || command.startsWith("tellraw ");
-    }
-
-    /**
-     * Locates the JSON argument of a component command when unresolved macros prevent Brigadier
-     * from producing an argument range. This is intentionally a narrow lexer fallback: all normal
-     * commands, and all commands whose macros have known caller values, use Brigadier ranges.
-     */
-    private static JsonRange locateComponentJson(String command) {
-        if (command == null || command.isBlank()) return null;
-        int start = -1;
-        for (String keyword : List.of("dialog show", " title ", " subtitle ", " actionbar ", " tellraw ", "tellraw ")) {
-            int found = command.indexOf(keyword);
-            if (found < 0) continue;
-            int candidate = found + keyword.length();
-            int json = findNextJson(command, candidate);
-            if (json >= 0 && (start < 0 || json < start)) start = json;
-        }
-        if (start < 0) return null;
-        int end = balancedJsonEnd(command, start);
-        if (end < 0) return null;
-        return new JsonRange(start, end);
-    }
-
-    private static Optional<JsonElement> parseJson(String value) {
-        if (value == null || value.isBlank()) return Optional.empty();
-        try {
-            return Optional.of(JsonParser.parseString(value));
-        } catch (JsonParseException | IllegalStateException ignored) {
-            return Optional.empty();
-        }
-    }
-
-    /** Parses generated component JSON while treating an unquoted macro as one component value. */
-    private static Optional<JsonElement> parseJsonWithBareComponentMacros(String value) {
-        Optional<JsonElement> direct = parseJson(value);
-        if (direct.isPresent()) return direct;
-        String normalized = replaceBareComponentMacros(value);
-        return normalized.equals(value) ? Optional.empty() : parseJson(normalized);
-    }
-
-    private static String replaceBareComponentMacros(String value) {
-        StringBuilder result = new StringBuilder(value.length());
-        char quote = 0;
-        boolean escaped = false;
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (quote != 0) {
-                result.append(character);
-                if (escaped) escaped = false;
-                else if (character == '\\') escaped = true;
-                else if (character == quote) quote = 0;
-                continue;
-            }
-            if (character == '\"' || character == '\'') {
-                quote = character;
-                result.append(character);
-                continue;
-            }
-            if (character != '$' || index + 2 >= value.length() || value.charAt(index + 1) != '(') {
-                result.append(character);
-                continue;
-            }
-            int close = value.indexOf(')', index + 2);
-            if (close < 0) {
-                result.append(character);
-                continue;
-            }
-            int previous = index - 1;
-            while (previous >= 0 && Character.isWhitespace(value.charAt(previous))) previous--;
-            int next = close + 1;
-            while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
-            boolean elementBoundary =
-                    previous >= 0
-                            && (value.charAt(previous) == '['
-                                    || value.charAt(previous) == ','
-                                    || value.charAt(previous) == ':')
-                            && next < value.length()
-                            && (value.charAt(next) == ']'
-                                    || value.charAt(next) == ','
-                                    || value.charAt(next) == '}');
-            if (!elementBoundary) {
-                result.append(value, index, close + 1);
-                index = close;
-                continue;
-            }
-            String macro = value.substring(index, close + 1);
-            result.append("{\"text\":\"").append(macro).append("\"}");
-            index = close;
-        }
-        return result.toString();
-    }
-
-    private static int findNextJson(String command, int start) {
-        char quote = 0;
-        boolean escaped = false;
-        for (int i = start; i < command.length(); i++) {
-            char character = command.charAt(i);
-            if (quote != 0) {
-                if (escaped) escaped = false;
-                else if (character == '\\') escaped = true;
-                else if (character == quote) quote = 0;
-                continue;
-            }
-            if (character == '\'' || character == '"') {
-                quote = character;
-            } else if (character == '{' || character == '[') {
-                // A tellraw/dialog target may itself contain a selector such as
-                // @a[distance=..8]. Try each balanced candidate instead of assuming that the
-                // first square bracket is the JSON component array.
-                int end = balancedJsonEnd(command, i);
-                if (end > i
-                        && parseJsonWithBareComponentMacros(command.substring(i, end)).isPresent()) {
-                    return i;
-                }
-            }
-        }
-        return -1;
-    }
-
-    private static int balancedJsonEnd(String command, int start) {
-        int curly = 0;
-        int square = 0;
-        char quote = 0;
-        boolean escaped = false;
-        for (int i = start; i < command.length(); i++) {
-            char character = command.charAt(i);
-            if (quote != 0) {
-                if (escaped) escaped = false;
-                else if (character == '\\') escaped = true;
-                else if (character == quote) quote = 0;
-                continue;
-            }
-            if (character == '\'' || character == '"') {
-                quote = character;
-            } else if (character == '{') {
-                curly++;
-            } else if (character == '}') {
-                if (--curly == 0 && square == 0) return i + 1;
-            } else if (character == '[') {
-                square++;
-            } else if (character == ']') {
-                if (--square == 0 && curly == 0) return i + 1;
-            }
-        }
-        return -1;
-    }
-
-    private record JsonRange(int start, int end) {}
-
-    private static boolean containsCommandNode(
-            CommandContextBuilder<CommandSourceStack> context, String name) {
-        CommandContextBuilder<CommandSourceStack> current = context;
-        while (current != null) {
-            if (current.getNodes().stream()
-                    .anyMatch(node -> name.equals(node.getNode().getName()))) return true;
-            current = current.getChild();
-        }
-        return false;
-    }
-
     private static boolean isTextNbtValueArgument(
             String command, CommandContextBuilder<CommandSourceStack> context) {
-        if (!containsCommandNode(context, "data")
-                || !containsCommandNode(context, "modify")
-                || !containsCommandNode(context, "entity")) {
+        if (!CommandArgumentSupport.containsCommandNode(context, "data")
+                || !CommandArgumentSupport.containsCommandNode(context, "modify")
+                || !CommandArgumentSupport.containsCommandNode(context, "entity")) {
             return false;
         }
-        ParsedArgument<CommandSourceStack, ?> path = findArgument(context, "path", "targetPath");
+        ParsedArgument<CommandSourceStack, ?> path =
+                CommandArgumentSupport.findArgument(context, "path", "targetPath");
         if (path == null) return false;
-        String value = argumentText(command, path).trim();
+        String value = CommandArgumentSupport.argumentText(command, path).trim();
         while ((value.startsWith("\"") && value.endsWith("\""))
                 || (value.startsWith("'") && value.endsWith("'"))) {
             value = value.substring(1, value.length() - 1).trim();
@@ -1106,86 +936,6 @@ final class CommandParseSupport {
             if (!component) return false;
         }
         return true;
-    }
-
-    private static java.util.Optional<String> findEntityId(
-            CommandContextBuilder<CommandSourceStack> context, String command) {
-        ParsedArgument<CommandSourceStack, ?> entityArgument = findArgument(context, "entity");
-        if (entityArgument == null || command == null || command.isBlank()) {
-            return java.util.Optional.empty();
-        }
-        String id = argumentText(command, entityArgument).trim();
-        if (id.isBlank()) return java.util.Optional.empty();
-        return java.util.Optional.of(id.indexOf(':') >= 0 ? id : "minecraft:" + id);
-    }
-
-    private static String argumentText(
-            String command, ParsedArgument<CommandSourceStack, ?> argument) {
-        return command.substring(argument.getRange().getStart(), argument.getRange().getEnd());
-    }
-
-    private static ParsedArgument<CommandSourceStack, ?> findArgument(
-            CommandContextBuilder<CommandSourceStack> context, String... names) {
-        CommandContextBuilder<CommandSourceStack> current = context;
-        while (current != null) {
-            for (String name : names) {
-                ParsedArgument<CommandSourceStack, ?> argument = current.getArguments().get(name);
-                if (argument != null) return argument;
-            }
-            current = current.getChild();
-        }
-        return null;
-    }
-
-    private static String storageId(
-            String command, ParsedArgument<CommandSourceStack, ?> target) {
-        String targetText = argumentText(command, target).trim();
-        if (targetText.startsWith("storage ")) {
-            return firstToken(targetText.substring("storage ".length()));
-        }
-
-        // In command versions where `storage` is a literal node, Brigadier's target argument
-        // starts at the identifier itself. Verify the preceding literal rather than guessing a
-        // storage command from arbitrary text.
-        int start = target.getRange().getStart();
-        while (start > 0 && Character.isWhitespace(command.charAt(start - 1))) start--;
-        int literalEnd = start;
-        while (start > 0 && !Character.isWhitespace(command.charAt(start - 1))) start--;
-        if ("storage".equals(command.substring(start, literalEnd))) {
-            return command.substring(target.getRange().getStart(), target.getRange().getEnd());
-        }
-        return null;
-    }
-
-    private static String firstToken(String value) {
-        int end = 0;
-        while (end < value.length() && !Character.isWhitespace(value.charAt(end))) end++;
-        return value.substring(0, end);
-    }
-
-    private static Map<String, String> storageValues(Tag tag) {
-        Map<String, String> values = new LinkedHashMap<>();
-        values.put("$value", storageValue(tag));
-        flattenStorageValues(values, "", tag);
-        return values;
-    }
-
-    private static void flattenStorageValues(
-            Map<String, String> values, String prefix, Tag tag) {
-        if (!(tag instanceof CompoundTag compound)) return;
-        for (String key : NbtUtils.getKeys(compound)) {
-            Tag child = compound.get(key);
-            if (child == null) continue;
-            String path = prefix.isEmpty() ? key : prefix + "." + key;
-            values.put(path, storageValue(child));
-            flattenStorageValues(values, path, child);
-        }
-    }
-
-    private static String storageValue(Tag tag) {
-        return tag instanceof StringTag stringTag
-                ? NbtUtils.getStringValue(stringTag)
-                : tag.toString();
     }
 
     /** A selector name identifies a runtime target and is never a translatable component. */
