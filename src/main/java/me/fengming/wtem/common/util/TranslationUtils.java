@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Stream;
 
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
@@ -392,19 +393,19 @@ public final class TranslationUtils {
             // Component codec serialization represents an input component sequence as one root
             // literal plus an `extra` array.  Treat that representation as a single sequence so a
             // score/selector/NBT child can become a `with` argument between two literal siblings.
-            // Processing the merged result once more walks its hover/click/separator members.
-            List<JsonElement> sequence = new ArrayList<>();
+            // The normal array path is also responsible for splitting differently styled text;
+            // bypassing it here would apply the root style to every sibling and discard their
+            // individual formatting.
+            JsonArray sequence = new JsonArray();
             JsonObject root = source.deepCopy();
             root.remove("extra");
             sequence.add(root);
             source.getAsJsonArray("extra").forEach(child -> sequence.add(child.deepCopy()));
-            TransformResult merged = translateComponentGroup(sequence);
-            if (merged.value().isJsonObject()) {
-                TransformResult nested = translateComponentObject(merged.value().getAsJsonObject());
-                return new TransformResult(
-                        nested.value(), merged.changed() || nested.changed());
-            }
-            return merged;
+            TransformResult translated = translateComponentArray(sequence);
+            JsonArray result = translated.value().getAsJsonArray();
+            return new TransformResult(
+                    result.size() == 1 ? result.get(0) : result,
+                    translated.changed());
         }
 
         JsonObject result = source;
@@ -480,7 +481,6 @@ public final class TranslationUtils {
         StringBuilder template = new StringBuilder();
         JsonArray arguments = new JsonArray();
         boolean hasText = false;
-        boolean hasDynamicArgument = false;
 
         for (JsonElement element : group) {
             if (isTextElement(element)) {
@@ -499,7 +499,6 @@ public final class TranslationUtils {
                 JsonElement argument = translated.value();
                 template.append("%s");
                 arguments.add(argument.deepCopy());
-                hasDynamicArgument = true;
             }
         }
 
@@ -511,7 +510,8 @@ public final class TranslationUtils {
         }
 
         JsonObject translated = translatedTextObject(template.toString(), arguments, anchor);
-        return new TransformResult(translated, true);
+        TransformResult nested = translateComponentObject(translated);
+        return new TransformResult(nested.value(), true);
     }
 
     private static boolean isLiteralComponent(JsonObject component) {
@@ -532,12 +532,10 @@ public final class TranslationUtils {
         if (isTextElement(element)) return true;
         if (!element.isJsonObject()) return false;
         JsonObject object = element.getAsJsonObject();
-        return object.has("translate")
-                || object.has("score")
-                || object.has("selector")
-                || object.has("nbt")
-                || object.has("keybind")
-                || object.has("object");
+        return Stream.of(
+            "translate", "score", "selector",
+                "nbt", "keybind", "object")
+            .anyMatch(object::has);
     }
 
     private static String componentStyle(JsonElement element) {
@@ -545,9 +543,10 @@ public final class TranslationUtils {
         JsonObject style = element.getAsJsonObject().deepCopy();
         for (String name :
                 List.of(
-                        "text", "type", "translate", "fallback", "with", "score", "selector",
-                        "nbt", "keybind", "object", "extra", "separator", LEGACY_HOVER_EVENT,
-                        HOVER_EVENT, LEGACY_CLICK_EVENT, CLICK_EVENT)) {
+                    "text", "type", "translate",
+                    "fallback", "with", "score",
+                    "selector", "nbt", "keybind",
+                    "object")) {
             style.remove(name);
         }
         return style.toString();
@@ -868,16 +867,10 @@ public final class TranslationUtils {
 
     private static boolean isNestedComponentProperty(String name) {
         return switch (name) {
-            case "contents",
-                    "description",
-                    "title",
-                    "external_title",
-                    "label",
-                    "tooltip",
-                    "display",
-                    "separator",
-                    "extra",
-                    "name" -> true;
+            case "contents", "description", "title",
+                 "external_title", "label", "tooltip",
+                 "display", "separator", "extra",
+                 "name" -> true;
             default -> false;
         };
     }

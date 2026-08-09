@@ -133,4 +133,38 @@ class TranslationUtilsTest {
                 "[{\"translate\":\"datapack.test.dialog\",\"with\":[{\"score\":{\"name\":\"a1\",\"objective\":\"b2\"}}]}]",
                 result.toString());
     }
+
+    @Test
+    void preservesStyleBoundariesAfterCodecRoundTrip() {
+        String source =
+                "[{\"text\":\"第一位守护者正在\",\"color\":\"#ffffff\",\"shadow_color\":-16777216},"
+                        + "{\"text\":\"沙漠\",\"color\":\"#e8f807\",\"shadow_color\":-16777216},"
+                        + "{\"text\":\"等待着你。\",\"color\":\"#ffffff\",\"shadow_color\":-16777216}]";
+        String result = TranslationUtils.translateLiteral(source, false);
+
+        assertEquals(
+                Map.of(
+                        "datapack.test.dialog", "第一位守护者正在",
+                        "datapack.test.dialog.1", "沙漠",
+                        "datapack.test.dialog.2", "等待着你。"),
+                TranslationContext.snapshot());
+
+        JsonObject root = JsonParser.parseString(result).getAsJsonObject();
+        assertEquals("datapack.test.dialog", root.get("translate").getAsString());
+        assertEquals("#FFFFFF", root.get("color").getAsString());
+        if (root.has("shadow_color")) {
+            assertEquals(-16777216, root.get("shadow_color").getAsInt());
+        }
+
+        var extra = root.getAsJsonArray("extra");
+        assertEquals(2, extra.size());
+        assertEquals(
+                "datapack.test.dialog.1",
+                extra.get(0).getAsJsonObject().get("translate").getAsString());
+        assertEquals("#E8F807", extra.get(0).getAsJsonObject().get("color").getAsString());
+        assertEquals(
+                "datapack.test.dialog.2",
+                extra.get(1).getAsJsonObject().get("translate").getAsString());
+        assertEquals("#FFFFFF", extra.get(1).getAsJsonObject().get("color").getAsString());
+    }
 }

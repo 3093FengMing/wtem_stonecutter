@@ -577,6 +577,33 @@ class FunctionHandlerTest {
     }
 
     @Test
+    void preservesEveryStyledTextComponentInASequence() {
+        String command =
+                "title @s actionbar "
+                        + "[{text:'第一位守护者正在',color:'#ffffff',shadow_color:-16777216},"
+                        + "{text:'沙漠',color:'#e8f807',shadow_color:-16777216},"
+                        + "{text:'等待着你。',color:'#ffffff',shadow_color:-16777216}]";
+
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertEquals(
+                "title @s actionbar "
+                        + "[{\"translate\":\"datapack.test.function\",\"color\":\"#ffffff\","
+                        + "\"shadow_color\":-16777216},"
+                        + "{\"translate\":\"datapack.test.function.1\",\"color\":\"#e8f807\","
+                        + "\"shadow_color\":-16777216},"
+                        + "{\"translate\":\"datapack.test.function.2\",\"color\":\"#ffffff\","
+                        + "\"shadow_color\":-16777216}]",
+                result);
+        assertEquals(
+                Map.of(
+                        "datapack.test.function", "第一位守护者正在",
+                        "datapack.test.function.1", "沙漠",
+                        "datapack.test.function.2", "等待着你。"),
+                TranslationContext.snapshot());
+    }
+
+    @Test
     void extractsTextOnlyFromDataMergeEntityNbt() {
         String command =
                 "data merge entity @e[type=minecraft:text_display,tag=research_text_damage_10,limit=1] "
