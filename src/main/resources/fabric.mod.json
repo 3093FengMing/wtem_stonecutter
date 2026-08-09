@@ -25,7 +25,9 @@
   ],
   "depends": {
     "fabricloader": ">=0.18",
-    "minecraft": "${minecraft}",
+    "minecraft": "${minecraft}"
+  },
+  "suggests": {
     "yet_another_config_lib_v3": "${yacl}"
   }
 }

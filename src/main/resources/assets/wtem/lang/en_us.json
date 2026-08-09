@@ -9,7 +9,6 @@
   "gui.wtem.main.extraction.working": "Extracting...",
   "gui.wtem.main.extraction.ai_translating": "AI translating...",
   "gui.wtem.main.extraction.finished": "Finished extracting",
-  "gui.wtem.main.exit": "Exit",
   "gui.wtem.main.title": "World Translation Extractor",
   "gui.wtem.main.info.extracted": "Extracted chunks: %s",
   "gui.wtem.main.info.warnings": "Warnings: %s (see log for details)",

@@ -122,6 +122,8 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 提取页面的“选择来源”按钮会打开只包含数据包、SavedData 文件和实体/方块实体类型选择的 YACL 界面。
 在外部编辑 `wtem.json` 也会自动热重载。正在运行的提取使用启动时快照，修改只影响下一次运行。
 
+YACL 并不是必选的，但我们强烈推荐你安装。
+
 ```json
 {
   "stages": {
@@ -238,7 +240,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
   "resource_pack": {
     "enabled": true,
     "format": "zip",
-    "name": "resources.zip",
+    "name": "wtem_resources.zip",
     "description": "WTEM translations",
     "pack_format": 0
   }

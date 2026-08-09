@@ -32,7 +32,7 @@ class WtemConfigTest {
         assertFalse(config.rebuildNestedKeys());
         assertTrue(config.resourcePack().enabled());
         assertEquals(WtemConfig.ResourcePack.Format.ZIP, config.resourcePack().format());
-        assertEquals("resources.zip", config.resourcePack().name());
+        assertEquals("wtem_resources.zip", config.resourcePack().name());
         assertEquals(WtemConfig.Skipped.DEFAULT, config.skipped());
         assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, config.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, config.languageFile());
@@ -516,7 +516,7 @@ class WtemConfigTest {
         assertFalse(reloaded.rebuildNestedKeys());
         assertTrue(reloaded.resourcePack().enabled());
         assertEquals(WtemConfig.ResourcePack.Format.ZIP, reloaded.resourcePack().format());
-        assertEquals("resources.zip", reloaded.resourcePack().name());
+        assertEquals("wtem_resources.zip", reloaded.resourcePack().name());
         assertEquals(WtemConfig.Skipped.DEFAULT, reloaded.skipped());
         assertEquals(WtemConfig.DEFAULT_SKIPPED_PATHS, reloaded.skippedPaths());
         assertEquals(WtemConfig.DEFAULT_BUILTIN_ENTRIES, reloaded.builtinEntries());

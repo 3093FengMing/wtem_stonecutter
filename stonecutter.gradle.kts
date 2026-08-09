@@ -47,19 +47,18 @@ stonecutter parameters {
             replace(".location()", ".identifier()")
         }
 
-
-        // 26.1 made ChunkPos a record; earlier mappings expose public x/z fields.
-        string(current.parsed >= "26.1", "chunk_pos_api") {
-            replace("chunkPos.x", "chunkPos.x()")
-            replace("chunkPos.z", "chunkPos.z()")
-        }
-
         // 1.21.5 turned the primitive tags into records and renamed the key accessor
         string(current.parsed >= "1.21.5", "nbt_api") {
             replace(".getAsString()", ".value()")
             replace(".getAllKeys()", ".keySet()")
             replace(".getAsInt()", ".intValue()")
             replace(".getAsDouble()", ".doubleValue()")
+        }
+
+        // 26.1 made ChunkPos a record; earlier mappings expose public x/z fields.
+        string(current.parsed >= "26.1", "chunk_pos_api") {
+            replace("chunkPos.x", "chunkPos.x()")
+            replace("chunkPos.z", "chunkPos.z()")
         }
 
         string(current.parsed >= "26.1") {
@@ -72,6 +71,11 @@ stonecutter parameters {
             replace("GuiGraphics", "GuiGraphicsExtractor")
             replace("drawCenteredString", "centeredText")
             replace("drawString", "text")
+            replace("setScreen", "setScreenAndShow")
+        }
+
+        string(current.parsed >= "26.2", "screen") {
+            replace("minecraft.setScreen", "minecraft.setScreenAndShow")
         }
     }
 }

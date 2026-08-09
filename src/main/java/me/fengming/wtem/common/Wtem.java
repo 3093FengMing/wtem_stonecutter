@@ -16,8 +16,11 @@ public final class Wtem implements ClientModInitializer {
     public static final String MOD_ID = "wtem";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
+    public static boolean LOADED_YACL = false;
+
     @Override
     public void onInitializeClient() {
+        LOADED_YACL = FabricLoader.getInstance().isModLoaded("yet_another_config_lib_v3");
         ResourceHandlers.initialize(DefaultResourceHandlers.create());
         WtemConfigManager.initialize(
                 FabricLoader.getInstance().getConfigDir(), ResourceHandlers.directories());

@@ -134,6 +134,7 @@ public class WtemScreen extends Screen {
                                 .bounds(this.width / 2 - 100, this.height / 4 + 120, 200, 20)
                                 .build());
 
+        if (!Wtem.LOADED_YACL) return;
         configButton =
                 this.addRenderableWidget(
                         Button.builder(
@@ -223,7 +224,7 @@ public class WtemScreen extends Screen {
         boolean started = status != ExtractionStatus.READY;
         this.closeButton.setMessage(
                 status.isTerminal()
-                        ? Component.translatable("gui.wtem.main.exit")
+                        ? CommonComponents.GUI_DONE
                         : CommonComponents.GUI_CANCEL);
         extractButton.visible = !started;
         selectButton.visible = !started;

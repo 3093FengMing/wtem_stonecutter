@@ -1177,7 +1177,7 @@ public record WtemConfig(
             String name,
             String description,
             int packFormat) {
-        private static final String DEFAULT_NAME = "resources.zip";
+        private static final String DEFAULT_NAME = "wtem_resources.zip";
         private static final String DEFAULT_DESCRIPTION = "WTEM translations";
         public static final ResourcePack DEFAULT =
                 new ResourcePack(

@@ -123,6 +123,8 @@ The Configuration button is reserved for the other extraction settings.
 Editing `wtem.json` externally is hot-reloaded automatically.
 A running extraction keeps its startup snapshot, so changes apply to the next run.
 
+YACL is not mandatory, but we strongly recommend that you install it.
+
 ```json
 {
   "stages": {
@@ -239,7 +241,7 @@ A running extraction keeps its startup snapshot, so changes apply to the next ru
   "resource_pack": {
     "enabled": true,
     "format": "zip",
-    "name": "resources.zip",
+    "name": "wtem_resources.zip",
     "description": "WTEM translations",
     "pack_format": 0
   }

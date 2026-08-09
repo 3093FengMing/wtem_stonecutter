@@ -9,7 +9,6 @@
   "gui.wtem.main.extraction.working": "正在提取……",
   "gui.wtem.main.extraction.ai_translating": "AI 翻译中……",
   "gui.wtem.main.extraction.finished": "提取完成",
-  "gui.wtem.main.exit": "退出",
   "gui.wtem.main.title": "世界翻译提取器",
   "gui.wtem.main.info.extracted": "已提取区块：%s",
   "gui.wtem.main.info.warnings": "警告：%s（详情请查看日志）",
