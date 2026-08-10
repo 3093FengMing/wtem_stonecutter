@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import me.fengming.wtem.common.config.WtemConfig;
+import me.fengming.wtem.common.core.extraction.pattern.ExtractionPatterns;
 import me.fengming.wtem.common.config.WtemConfigManager;
 import me.fengming.wtem.common.core.handler.datapack.ResourceHandlers;
 import net.fabricmc.api.EnvType;
@@ -247,6 +248,7 @@ public final class WtemConfigScreen {
         private boolean filteredText;
         private List<String> skippedPaths;
         private List<String> savedDataTextFields;
+        private ExtractionPatterns patterns;
         private List<String> filtersRegion;
         private List<String> filtersDatapack;
         private List<String> filtersStorage;
@@ -290,6 +292,7 @@ public final class WtemConfigScreen {
             draft.filteredText = config.skipped().filteredText();
             draft.skippedPaths = config.skippedPaths();
             draft.savedDataTextFields = config.savedDataTextFields();
+            draft.patterns = config.patterns();
             draft.filtersRegion = config.filters().region();
             draft.filtersDatapack = config.filters().datapack();
             draft.filtersStorage = config.filters().storage();
@@ -357,7 +360,8 @@ public final class WtemConfigScreen {
                             aiKeyNamingPrompt,
                             aiProtocol),
                     new WtemConfig.ResourcePack(packEnabled, packFormat, packName, packDescription, packPackFormat),
-                    savedDataTextFields);
+                    savedDataTextFields,
+                    patterns);
         }
 
         private WtemConfig.Filters.Selection configSelection() {

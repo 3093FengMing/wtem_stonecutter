@@ -3,6 +3,7 @@ package me.fengming.wtem.common.config;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collection;
@@ -35,7 +36,7 @@ public final class WtemConfigManager {
             resourceDirectories = List.copyOf(directories);
             WtemConfig config = WtemConfig.loadOrCreate(directory, resourceDirectories);
             WtemConfig.initialize(config);
-            stamp = readStamp(file());
+            stamp = readStamp(file(), config);
             reportedBadStamp = FileStamp.missing();
             tickCounter = 0;
         }
@@ -59,7 +60,7 @@ public final class WtemConfigManager {
             try {
                 ResourceIo.writeJson(target, config.toJson(resourceDirectories));
                 WtemConfig.initialize(config);
-                stamp = readStamp(target);
+                stamp = readStamp(target, config);
                 reportedBadStamp = FileStamp.missing();
                 return true;
             } catch (RuntimeException exception) {
@@ -79,13 +80,15 @@ public final class WtemConfigManager {
             if (++tickCounter < 20) return;
             tickCounter = 0;
             Path target = file();
-            FileStamp current = readStamp(target);
+            FileStamp current = readStamp(target, WtemConfig.active());
             if (current.equals(stamp)) return;
             try {
                 WtemConfig reloaded =
-                        WtemConfig.fromJson(ResourceIo.readJson(() -> Files.newInputStream(target), ""));
+                        WtemConfig.fromJson(
+                                ResourceIo.readJson(() -> Files.newInputStream(target), ""),
+                                directory);
                 WtemConfig.initialize(reloaded);
-                stamp = current;
+                stamp = readStamp(target, reloaded);
                 reportedBadStamp = FileStamp.missing();
                 Wtem.LOGGER.info("Reloaded WTEM configuration from {}", target);
             } catch (RuntimeException exception) {
@@ -108,6 +111,16 @@ public final class WtemConfigManager {
         } catch (IOException exception) {
             return FileStamp.unreadable();
         }
+    }
+
+    private static FileStamp readStamp(Path configFile, WtemConfig config) {
+        StringBuilder combined = new StringBuilder(readStamp(configFile).digest());
+        if (config != null && directory != null) {
+            for (Path patternFile : config.patterns().resolvedFiles(directory)) {
+                combined.append('\n').append(patternFile).append('=').append(readStamp(patternFile).digest());
+            }
+        }
+        return new FileStamp(fingerprint(combined.toString().getBytes(StandardCharsets.UTF_8)));
     }
 
     private static String fingerprint(byte[] bytes) {

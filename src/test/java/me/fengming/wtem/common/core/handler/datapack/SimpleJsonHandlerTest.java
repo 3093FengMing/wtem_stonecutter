@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.util.ResourceIds;
 import net.minecraft.SharedConstants;
 import net.minecraft.resources.Identifier;
@@ -39,6 +40,11 @@ class SimpleJsonHandlerTest {
     @BeforeEach
     void setUp() {
         TranslationContext.clear();
+    }
+
+    @AfterEach
+    void restoreConfig() {
+        WtemConfig.initialize(WtemConfig.DEFAULT);
     }
 
     @AfterEach
@@ -163,6 +169,67 @@ class SimpleJsonHandlerTest {
         // Nothing was rewritten, so the resource must not be republished into the world directory.
         assertFalse(Files.exists(this.directory.resolve("advancement.json")));
         assertEquals(Map.of(), TranslationContext.snapshot());
+    }
+
+    @Test
+    void appliesAUserJsonPatternAfterTheBuiltInTargets() {
+        JsonObject config = WtemConfig.DEFAULT.toJson(List.of("advancement"));
+        config.add(
+                "patterns",
+                JsonParser.parseString(
+                        "{\"json\":[{\"resource\":\"advancement\",\"path\":\"custom.title\"}]}"));
+        WtemConfig.initialize(WtemConfig.fromJson(config));
+        SimpleJsonHandler handler = handler();
+
+        assertTrue(
+                handler.handle(
+                        id("advancement.json"),
+                        source("{\"custom\":{\"title\":{\"text\":\"Configured title\"}}}")));
+
+        assertEquals(
+                "Configured title",
+                TranslationContext.snapshot().get("datapack.example.advancement.custom.title"));
+    }
+
+    @Test
+    void catalogsAnExplicitPlainJsonStringWithoutWritingAComponent() {
+        JsonObject config = WtemConfig.DEFAULT.toJson(List.of("advancement"));
+        config.add(
+                "patterns",
+                JsonParser.parseString(
+                        "{\"json\":[{\"resource\":\"advancement\",\"path\":\"custom.label\",\"kind\":\"plain_string\"}]}"));
+        WtemConfig.initialize(WtemConfig.fromJson(config));
+        SimpleJsonHandler handler = handler();
+        Identifier resource = id("advancement.json");
+
+        assertFalse(
+                handler.handle(
+                        resource,
+                        source("{\"custom\":{\"label\":\"Visible label\"}}")));
+        assertEquals(
+                "Visible label",
+                TranslationContext.snapshot().get("datapack.example.advancement.custom.label"));
+        assertFalse(Files.exists(this.directory.resolve("advancement.json")));
+    }
+
+    @Test
+    void customOnlyHandlersCanSelectAnArrayRoot() {
+        JsonObject config = WtemConfig.DEFAULT.toJson(List.of("custom"));
+        config.add(
+                "patterns",
+                JsonParser.parseString(
+                        "{\"json\":[{\"resource\":\"custom\",\"path\":\"[0].label\"}]}"));
+        WtemConfig.initialize(WtemConfig.fromJson(config));
+        SimpleJsonHandler handler =
+                new SimpleJsonHandler(
+                        "custom",
+                        rl -> this.directory.resolve(rl.getPath()),
+                        ResourceHandler.Context.of(List.of(), null, null, null));
+
+        assertTrue(
+                handler.handle(
+                        id("custom.json"), source("[{\"label\":{\"text\":\"Array label\"}}]")));
+        assertEquals("Array label", TranslationContext.snapshot().get("datapack.example.custom.0.label"));
     }
 
     @Test

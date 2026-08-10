@@ -11,6 +11,8 @@ import java.util.Locale;
 import me.fengming.wtem.common.Wtem;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.core.extraction.pattern.DataPath;
+import me.fengming.wtem.common.core.extraction.pattern.ExtractionPatterns;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 import me.fengming.wtem.common.core.extraction.VanillaSavedDataFiles;
 import me.fengming.wtem.common.util.ChangeTracker;
@@ -65,7 +67,14 @@ public final class SavedDataExtractor {
                         var ignored = TranslationContext.pushLocation(location);
                         var subject = TranslationContext.pushSubject(key)) {
                     int recordsBefore = TranslationContext.recordCount();
-                    boolean entryChanged = visit(entries, key, entries.get(key), fileName, key);
+                    boolean entryChanged =
+                            visit(
+                                    entries,
+                                    key,
+                                    entries.get(key),
+                                    fileName,
+                                    key,
+                                    List.of(DataPath.keyLocation(key)));
                     if (!entryChanged
                             && !TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
                         continue;
@@ -130,19 +139,35 @@ public final class SavedDataExtractor {
     }
 
     private boolean visit(
-            CompoundTag parent, String name, Tag value, String fileName, String keyPath) {
+            CompoundTag parent,
+            String name,
+            Tag value,
+            String fileName,
+            String keyPath,
+            List<DataPath.Location> dataPath) {
         if (value == null) return false;
         ChangeTracker tracker = new ChangeTracker();
         String normalized = name.toLowerCase(Locale.ROOT);
         String location = fileName + "/" + keyPath.replace('.', '/');
         boolean selected = this.config.filters().matchesStorage(fileName, location);
+        ExtractionPatterns.ValueKind customKind = customKind(fileName, dataPath);
         if (value instanceof StringTag && selected) {
             // SavedData strings cannot be distinguished reliably from human-facing text without
             // knowing the owning mod's schema. Always report them for manual review, while the
             // conservative component heuristic below still controls catalog extraction.
             recordStringWarning(fileName, keyPath, NbtUtils.getString(parent, name));
         }
-        if (isLikelyComponent(normalized, value) && selected) {
+        boolean component =
+                selected
+                        && (customKind == ExtractionPatterns.ValueKind.COMPONENT
+                                || customKind == null && isLikelyComponent(normalized, value));
+        if (customKind == ExtractionPatterns.ValueKind.PLAIN_STRING
+                && selected
+                && value instanceof StringTag) {
+            addCatalogString(NbtUtils.getString(parent, name), safeKeyPath(fileName, keyPath));
+            return false;
+        }
+        if (component) {
             if (value instanceof StringTag) {
                 String text = NbtUtils.getString(parent, name);
                 if (!looksLikeSerializedJson(text)) {
@@ -167,21 +192,29 @@ public final class SavedDataExtractor {
                                 child,
                                 compound.get(child),
                                 fileName,
-                                keyPath + "." + child));
+                                keyPath + "." + child,
+                                append(dataPath, DataPath.keyLocation(child))));
             }
         } else if (value instanceof ListTag list) {
-            tracker.add(visitList(list, normalized, fileName, keyPath));
+            tracker.add(visitList(list, normalized, fileName, keyPath, dataPath));
         }
         return tracker.isChanged();
     }
 
-    private boolean visitList(ListTag list, String fieldName, String fileName, String keyPath) {
+    private boolean visitList(
+            ListTag list,
+            String fieldName,
+            String fileName,
+            String keyPath,
+            List<DataPath.Location> dataPath) {
         ChangeTracker tracker = new ChangeTracker();
         for (int i = 0; i < list.size(); i++) {
             Tag child = list.get(i);
             String childPath = keyPath + "." + i;
             String childLocation = fileName + "/" + childPath.replace('.', '/');
             boolean selected = this.config.filters().matchesStorage(fileName, childLocation);
+            List<DataPath.Location> childDataPath = append(dataPath, DataPath.indexLocation(i));
+            ExtractionPatterns.ValueKind customKind = customKind(fileName, childDataPath);
             if (child instanceof StringTag && selected) {
                 recordStringWarning(fileName, childPath, NbtUtils.getString(list, i));
             }
@@ -189,7 +222,9 @@ public final class SavedDataExtractor {
             if (child instanceof CompoundTag compound) {
                 boolean componentChanged =
                         selected
-                                && isLikelyComponent(fieldName, compound)
+                        && (customKind == ExtractionPatterns.ValueKind.COMPONENT
+                                || customKind == null
+                                        && isLikelyComponent(fieldName, compound))
                                 && TranslationUtils.translateNbtComponent(
                                         list, i, safeKeyPath(fileName, childPath));
                 tracker.add(componentChanged);
@@ -201,16 +236,22 @@ public final class SavedDataExtractor {
                                         childName,
                                         compound.get(childName),
                                         fileName,
-                                        childPath + "." + childName));
+                                        childPath + "." + childName,
+                                        append(childDataPath, DataPath.keyLocation(childName))));
                     }
                 }
             } else if (child instanceof ListTag nested) {
-                tracker.add(visitList(nested, fieldName, fileName, childPath));
-            } else if (selected && isLikelyComponent(fieldName, child)) {
+                tracker.add(
+                        visitList(nested, fieldName, fileName, childPath, childDataPath));
+            } else if (selected
+                    && (customKind == ExtractionPatterns.ValueKind.PLAIN_STRING
+                            || customKind == ExtractionPatterns.ValueKind.COMPONENT
+                            || customKind == null && isLikelyComponent(fieldName, child))) {
                 String key = safeKeyPath(fileName, childPath);
                 if (child instanceof StringTag textTag) {
                     String text = NbtUtils.getStringValue(textTag);
-                    if (!looksLikeSerializedJson(text)) {
+                    if (customKind == ExtractionPatterns.ValueKind.PLAIN_STRING
+                            || !looksLikeSerializedJson(text)) {
                         addCatalogString(text, key);
                         continue;
                     }
@@ -219,6 +260,22 @@ public final class SavedDataExtractor {
             }
         }
         return tracker.isChanged();
+    }
+
+    private ExtractionPatterns.ValueKind customKind(
+            String fileName, List<DataPath.Location> dataPath) {
+        for (ExtractionPatterns.SavedDataRule rule : this.config.patterns().savedData()) {
+            if (rule.matches(fileName, dataPath)) return rule.kind();
+        }
+        return null;
+    }
+
+    private static List<DataPath.Location> append(
+            List<DataPath.Location> path, DataPath.Location child) {
+        List<DataPath.Location> result = new ArrayList<>(path.size() + 1);
+        result.addAll(path);
+        result.add(child);
+        return List.copyOf(result);
     }
 
     private static List<String> sortedKeys(CompoundTag tag) {

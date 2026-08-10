@@ -46,6 +46,7 @@ public class LootTableHandler extends NonExtraResourceHandler {
             }
         }
         boolean changed = !table.equals(original);
+        changed |= JsonPatternSupport.apply(table, getPath(), rl);
         if (changed) ResourceIo.writeJson(getFilePath(rl), table);
         return changed;
     }

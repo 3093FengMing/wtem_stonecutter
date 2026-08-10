@@ -375,6 +375,16 @@ final class CommandParseSupport {
                                             line.materializedArgument(argumentStart, argumentEnd),
                                             parser.registries());
                         if (replacement == null) {
+                            replacement =
+                                    CommandPatternSupport.createReplacement(
+                                            context,
+                                            entry.getKey(),
+                                            argument,
+                                            argumentStart,
+                                            argumentEnd,
+                                            sourceArgument);
+                        }
+                        if (replacement == null) {
                             if (TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
                                 transaction.commit();
                             }

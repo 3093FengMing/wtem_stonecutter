@@ -14,6 +14,7 @@ import java.util.Objects;
 import java.util.stream.Stream;
 
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.core.extraction.pattern.DataPath;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.core.visitor.ItemTagVisitor;
 import net.minecraft.nbt.CompoundTag;
@@ -356,20 +357,63 @@ public final class TranslationUtils {
      */
     public static boolean translateJsonElement(JsonObject json, String path) {
         if (json == null || path == null || path.isBlank()) return false;
+        try {
+            return translateJsonElement(json, DataPath.parse(path));
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
+    /** Translates the value selected by a pre-validated custom extraction path. */
+    public static boolean translateJsonElement(JsonObject json, DataPath path) {
+        return translateJsonElement((JsonElement) json, path);
+    }
+
+    /** Translates a value selected from any mutable JSON root, including an array root. */
+    public static boolean translateJsonElement(JsonElement json, DataPath path) {
+        if (json == null || path == null || json.isJsonNull()) return false;
 
         try (var transaction = TranslationContext.beginTransaction()) {
-            List<PathSegment> segments = parseJsonPath(path);
-            JsonObject working = json.deepCopy();
-            if (!translateJsonPath(working, segments, 0).changed()) return false;
-
-            json.entrySet().clear();
-            for (Map.Entry<String, JsonElement> entry : working.entrySet()) {
-                json.add(entry.getKey(), entry.getValue());
+            JsonElement working = json.deepCopy();
+            if (!translateJsonPath(working, path.segments(), 0).changed()) return false;
+            if (json.isJsonObject() && working.isJsonObject()) {
+                JsonObject target = json.getAsJsonObject();
+                target.entrySet().clear();
+                for (Map.Entry<String, JsonElement> entry : working.getAsJsonObject().entrySet()) {
+                    target.add(entry.getKey(), entry.getValue());
+                }
+            } else if (json.isJsonArray() && working.isJsonArray()) {
+                JsonArray target = json.getAsJsonArray();
+                // JsonArray#clear ??
+                while (!target.isEmpty()) target.remove(target.size() - 1);
+                for (JsonElement entry : working.getAsJsonArray()) target.add(entry);
+            } else {
+                return false;
             }
             transaction.commit();
             return true;
         } catch (JsonParseException | IllegalArgumentException | IllegalStateException e) {
             return false;
+        }
+    }
+
+    /**
+     * Catalogs string leaves selected by an explicit {@code plain_string} rule without replacing
+     * them with components. Every value records a warning because the selected schema may still
+     * contain identifiers or other non-visible strings.
+     */
+    public static int catalogJsonStrings(JsonObject json, DataPath path) {
+        return catalogJsonStrings((JsonElement) json, path);
+    }
+
+    /** Catalogs string leaves selected from any JSON root without changing that root. */
+    public static int catalogJsonStrings(JsonElement json, DataPath path) {
+        if (json == null || path == null || json.isJsonNull()) return 0;
+        try (var transaction = TranslationContext.beginTransaction()) {
+            int count = catalogJsonPath(json, path.segments(), 0);
+            if (count == 0) return 0;
+            transaction.commit();
+            return count;
         }
     }
 
@@ -741,63 +785,140 @@ public final class TranslationUtils {
     }
 
     private static PathTransform translateJsonPath(
-            JsonElement current, List<PathSegment> segments, int segmentIndex) {
+            JsonElement current, List<DataPath.Segment> segments, int segmentIndex) {
         if (segmentIndex >= segments.size()) {
             TransformResult translated = translateJsonComponentTree(current);
             return new PathTransform(translated.value(), translated.changed());
         }
 
-        PathSegment segment = segments.get(segmentIndex);
-        JsonElement child = current;
-        JsonObject parentObject = null;
-        if (!segment.name().isEmpty()) {
+        DataPath.Segment segment = segments.get(segmentIndex);
+        if (segment instanceof DataPath.KeySegment key) {
             if (!current.isJsonObject()) return PathTransform.unchanged(current);
-            parentObject = current.getAsJsonObject();
-            if (!parentObject.has(segment.name())) return PathTransform.unchanged(current);
-            child = parentObject.get(segment.name());
-        }
-
-        // The key path follows the resolved location, so an unnamed segment contributes nothing and a
-        // wildcard contributes the visited index instead of the literal '*'.
-        try (var ignored = TranslationContext.push(keySegment(segment.name()))) {
-            if (!segment.hasArraySelector()) {
-                PathTransform translated = translateJsonPath(child, segments, segmentIndex + 1);
-                if (translated.changed() && parentObject != null) {
-                    parentObject.add(segment.name(), translated.value());
+            JsonObject object = current.getAsJsonObject();
+            if (!key.wildcard()) {
+                if (!object.has(key.name())) return PathTransform.unchanged(current);
+                PathTransform translated;
+                try (var ignored = TranslationContext.push(keySegment(key.name()))) {
+                    translated = translateJsonPath(object.get(key.name()), segments, segmentIndex + 1);
                 }
+                if (translated.changed()) object.add(key.name(), translated.value());
                 return new PathTransform(current, translated.changed());
             }
 
-            if (!child.isJsonArray()) return PathTransform.unchanged(current);
-            JsonArray array = child.getAsJsonArray();
             boolean changed = false;
-            if (segment.wildcard()) {
-                for (int i = 0; i < array.size(); i++) {
-                    PathTransform translated;
-                    try (var e = TranslationContext.push(Integer.toString(i))) {
-                        translated = translateJsonPath(array.get(i), segments, segmentIndex + 1);
-                    }
-                    if (!translated.changed()) continue;
-                    array.set(i, translated.value());
-                    changed = true;
+            for (Map.Entry<String, JsonElement> entry : new ArrayList<>(object.entrySet())) {
+                PathTransform translated;
+                try (var ignored = TranslationContext.push(keySegment(entry.getKey()))) {
+                    translated = translateJsonPath(entry.getValue(), segments, segmentIndex + 1);
                 }
-                return new PathTransform(current, changed);
-            }
-
-            if (segment.index() < 0 || segment.index() >= array.size()) {
-                return PathTransform.unchanged(current);
-            }
-
-            PathTransform translated;
-            try (var e = TranslationContext.push(Integer.toString(segment.index()))) {
-                translated = translateJsonPath(array.get(segment.index()), segments, segmentIndex + 1);
-            }
-            if (translated.changed()) {
-                array.set(segment.index(), translated.value());
+                if (!translated.changed()) continue;
+                object.add(entry.getKey(), translated.value());
                 changed = true;
             }
             return new PathTransform(current, changed);
         }
+
+        if (!(segment instanceof DataPath.IndexSegment index) || !current.isJsonArray()) {
+            return PathTransform.unchanged(current);
+        }
+        JsonArray array = current.getAsJsonArray();
+        if (!index.wildcard()) {
+            if (index.index() < 0 || index.index() >= array.size()) {
+                return PathTransform.unchanged(current);
+            }
+            PathTransform translated;
+            try (var ignored = TranslationContext.push(Integer.toString(index.index()))) {
+                translated = translateJsonPath(array.get(index.index()), segments, segmentIndex + 1);
+            }
+            if (translated.changed()) array.set(index.index(), translated.value());
+            return new PathTransform(current, translated.changed());
+        }
+
+        boolean changed = false;
+        for (int elementIndex = 0; elementIndex < array.size(); elementIndex++) {
+            PathTransform translated;
+            try (var ignored = TranslationContext.push(Integer.toString(elementIndex))) {
+                translated = translateJsonPath(array.get(elementIndex), segments, segmentIndex + 1);
+            }
+            if (!translated.changed()) continue;
+            array.set(elementIndex, translated.value());
+            changed = true;
+        }
+        return new PathTransform(current, changed);
+    }
+
+    private static int catalogJsonPath(
+            JsonElement current, List<DataPath.Segment> segments, int segmentIndex) {
+        if (current == null || current.isJsonNull()) return 0;
+        if (segmentIndex >= segments.size()) return catalogJsonTree(current);
+
+        DataPath.Segment segment = segments.get(segmentIndex);
+        if (segment instanceof DataPath.KeySegment key) {
+            if (!current.isJsonObject()) return 0;
+            JsonObject object = current.getAsJsonObject();
+            if (!key.wildcard()) {
+                if (!object.has(key.name())) return 0;
+                try (var ignored = TranslationContext.push(keySegment(key.name()))) {
+                    return catalogJsonPath(object.get(key.name()), segments, segmentIndex + 1);
+                }
+            }
+
+            int count = 0;
+            for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
+                try (var ignored = TranslationContext.push(keySegment(entry.getKey()))) {
+                    count += catalogJsonPath(entry.getValue(), segments, segmentIndex + 1);
+                }
+            }
+            return count;
+        }
+
+        if (!(segment instanceof DataPath.IndexSegment index) || !current.isJsonArray()) return 0;
+        JsonArray array = current.getAsJsonArray();
+        if (!index.wildcard()) {
+            if (index.index() < 0 || index.index() >= array.size()) return 0;
+            try (var ignored = TranslationContext.push(Integer.toString(index.index()))) {
+                return catalogJsonPath(array.get(index.index()), segments, segmentIndex + 1);
+            }
+        }
+
+        int count = 0;
+        for (int elementIndex = 0; elementIndex < array.size(); elementIndex++) {
+            try (var ignored = TranslationContext.push(Integer.toString(elementIndex))) {
+                count += catalogJsonPath(array.get(elementIndex), segments, segmentIndex + 1);
+            }
+        }
+        return count;
+    }
+
+    private static int catalogJsonTree(JsonElement value) {
+        if (value.isJsonPrimitive()) {
+            if (!value.getAsJsonPrimitive().isString()) return 0;
+            String text = value.getAsString();
+            if (text.isBlank()) return 0;
+            TranslationContext.addCatalogEntry(text);
+            TranslationContext.recordWarning(
+                    "pattern_json_string",
+                    "A JSON string selected by a plain_string pattern remains unchanged and needs manual review");
+            return 1;
+        }
+        if (value.isJsonArray()) {
+            int count = 0;
+            JsonArray array = value.getAsJsonArray();
+            for (int index = 0; index < array.size(); index++) {
+                try (var ignored = TranslationContext.push(Integer.toString(index))) {
+                    count += catalogJsonTree(array.get(index));
+                }
+            }
+            return count;
+        }
+        if (!value.isJsonObject()) return 0;
+        int count = 0;
+        for (Map.Entry<String, JsonElement> entry : value.getAsJsonObject().entrySet()) {
+            try (var ignored = TranslationContext.push(keySegment(entry.getKey()))) {
+                count += catalogJsonTree(entry.getValue());
+            }
+        }
+        return count;
     }
 
     /**
@@ -938,31 +1059,6 @@ public final class TranslationUtils {
         return ResourceIds.path(name).replace('/', '.');
     }
 
-    private static List<PathSegment> parseJsonPath(String path) {
-        List<PathSegment> segments = new ArrayList<>();
-        for (String rawSegment : splitPath(path, '.')) {
-            int bracket = rawSegment.indexOf('[');
-            if (bracket < 0) {
-                segments.add(new PathSegment(rawSegment, -1, false, false));
-                continue;
-            }
-
-            if (!rawSegment.endsWith("]")) {
-                throw new IllegalArgumentException("Invalid JSON path segment: " + rawSegment);
-            }
-
-            String name = rawSegment.substring(0, bracket);
-            String selector = rawSegment.substring(bracket + 1, rawSegment.length() - 1);
-            if ("*".equals(selector)) {
-                segments.add(new PathSegment(name, -1, true, true));
-            } else {
-                segments.add(
-                        new PathSegment(name, Integer.parseInt(selector), false, true));
-            }
-        }
-        return segments;
-    }
-
     private static List<String> splitPath(String path, char separator) {
         List<String> segments = new ArrayList<>();
         int start = 0;
@@ -1022,8 +1118,6 @@ public final class TranslationUtils {
             return new PathTransform(value, false);
         }
     }
-
-    private record PathSegment(String name, int index, boolean wildcard, boolean hasArraySelector) {}
 
     private record TagPath(String[] parents, String name) {
         private static TagPath of(String path) {

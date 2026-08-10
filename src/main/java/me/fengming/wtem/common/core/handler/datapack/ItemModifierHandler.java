@@ -35,6 +35,9 @@ public class ItemModifierHandler extends NonExtraResourceHandler {
             json = processItemModifiers(json.getAsJsonArray());
         }
         boolean changed = !json.equals(original);
+        if (json.isJsonObject() || json.isJsonArray()) {
+            changed |= JsonPatternSupport.apply(json, getPath(), rl);
+        }
         if (changed) ResourceIo.writeJson(getFilePath(rl), json);
         return changed;
     }

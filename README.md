@@ -78,8 +78,6 @@ Its columns:
 | `reused`   | Whether this occurrence reused an existing key. `true` means it added no language file entry, and that editing the key affects more than one place. |
 | `replaced` | Whether the original world/data-pack value was replaced with a translate component. `false` identifies catalog-only text instead of a replaced one. |
 
-A key that appears in several places has one language file entry but one report row per occurrence, so the report usually has more rows than the language file has entries. If extraction is cancelled or fails partway, the part already written is exported along with the language file.
-
 ### Warning types
 
 Warnings are non-fatal diagnostics. Each warning includes its type and the source file, resource ID, command, or NBT path that caused it.
@@ -99,6 +97,8 @@ The warnings below identify cases that need review or could not be rewritten saf
 | `function_component_rewrite` | A text component or structured argument in a function could not be rewritten safely.                                                |
 | `function_selector_name`     | A selector name that looks like a text-bearing argument could not be resolved.                                                      |
 | `function_storage_string`    | A literal string was written directly into command storage by `data modify storage ... set value`.                                  |
+| `pattern_json_string`        | A custom JSON pattern selected a plain string. It is cataloged but left unchanged and needs manual review.                          |
+| `pattern_command_string`     | A custom command pattern selected a plain string. It is cataloged but left unchanged and needs manual review.                       |
 | `function_macro_binding`     | A macro caller/storage binding was missing, ambiguous, or not statically resolvable.                                                |
 | `function_macro_restore`     | A materialized macro command could not be restored and validated for its callers.                                                   |
 | `writable_book`              | A writable-book `writable_book_content.pages[*].raw` string was cataloged but cannot be replaced by a component (`replaced=false`). |
@@ -207,6 +207,12 @@ YACL is not mandatory, but we strongly recommend that you install it.
     "tooltip",
     "error_message"
   ],
+  "patterns": {
+    "files": [],
+    "json": [],
+    "saved_data": [],
+    "commands": []
+  },
   "filters": {
     "region": [],
     "datapack": [],
@@ -259,12 +265,73 @@ YACL is not mandatory, but we strongly recommend that you install it.
 - `builtin_entries`: entries seeded into the language file. Extracted text that matches one of them reuses its key instead of taking a key of its own. The defaults seed the empty string, a space and 0~9: text with no translation value that nonetheless shows up constantly (blank sign lines, numbers on a scoreboard), which after seeding takes one line each. An empty object `{}` seeds nothing; deleting the whole option keeps the defaults.
 - `language_file`: the name of the language file written into the world directory. Only a plain file name is accepted; a name containing a path separator or not ending in `.json` is ignored.
 - `saved_data_text_fields`: field names used to identify likely text components while scanning SavedData. The default list includes `back_text`; every other string in the selected SavedData scope is retained and reported as `saved_data_string` instead of being guessed as text.
+- `patterns`: typed custom extraction selectors. JSON rules select a data-pack resource directory and a structured path such as `body[*].contents`; SavedData rules select a `.dat` file and NBT path; command rules select a Brigadier command node and parsed argument. Rules are additive, `kind` defaults to `component`, and explicit `plain_string` rules catalog but do not rewrite their value. `files` contains relative JSON files below the WTEM config directory; those files use the same `json`, `saved_data`, and `commands` arrays. Paths support keys, `[*]`, numeric list indexes and escaped dots. JSON, NBT and commands are still parsed structurally with Gson/Minecraft codecs/Brigadier—this configuration does not use regex as a parser.
 - `filters`: unified source filters. A normal rule includes a location, `!` excludes it, and `*`/`?` are wildcards; exclusions always win. Region locations are `dimension/chunk/x_z`, data-pack locations are `pack/namespace:path`, SavedData locations are `<path below data>.dat/<NBT path>`, and the entity filters match full namespaced type IDs.
 - `filters.selection`: exact choices saved by the extraction screen. Data packs and SavedData files are discovered from the current world. Entity and block-entity choices come from the current version's registries. An empty list means all current. Unchecking every item stores the internal sentinel `["!none"]`, which explicitly means none.
 - `outputs`: enables per-chunk SNBT files under the world-relative `region_snbt_directory` and a schema JSON file.
 - `ai_translation`: when enabled, sends the complete catalog in one request to an OpenAI-compatible Responses or chat-completions endpoint. You may enter either a BaseURL or a complete `/responses` or `/chat/completions` URL; `protocol` selects the protocol when a BaseURL is used. `translation_prompt` supports the `{target_language}` placeholder, and `key_naming_prompt` controls optional AI semantic key naming.
 - `resource_pack`: when enabled, writes a folder, ZIP, or both using only the configured pack `name`. The pack contains `pack.mcmeta` and `assets/wtem/lang/` catalogs.
 
+### Custom extraction patterns
+
+The `patterns` section is an additive escape hatch for data-pack schemas that WTEM does not know
+about yet. It never disables a built-in selector. Built-in selectors are applied first and win when
+the same path is listed twice; custom selectors then add the paths that are specific to your pack.
+Minecraft's JSON/component codec, NBT parser, and Brigadier parser remain the source of truth. A
+pattern is a tree selector, not a text or command parser.
+
+`path` uses dot-separated object keys, numeric list indexes, and list wildcards:
+
+```text
+title
+body[*].contents
+entries[0].display.label
+payload.a\.b[1]       # the object key is literally a.b
+```
+
+JSON rules contain `resource`, `path`, and optional `namespace`, `resource_path`, and `kind`.
+- `resource`: the data-pack registry directory (`dialog`, `advancement`, or a custom exact directory).
+- `namespace` & `resource_path`: match based on namespace and resource path separately, accepting `*` and `?`
+- `kind`: `plain_string` or `component` (the default). The latter rewrites selected text components. The other catalogs selected strings, leaves the source unchanged, and emits warning.
+
+SavedData rules contain `file`, `path`, and optional `kind`.
+- `file`: match a file name below the world's `data/` directory and accepts `*` and `?`.
+SavedData handling still applies to ordinary strings.
+
+Command rules select the result of a command argument that Brigadier has already parsed:
+
+```json
+{
+  "patterns": {
+    "json": [
+      {"resource":"dialog", "path":"body[*].contents"},
+      {"resource":"my_registry", "path":"display.label", "kind":"plain_string"}
+    ],
+    "saved_data": [
+      {"file":"custom.dat", "path":"entry.display_label"}
+    ],
+    "commands": [
+      {"command":"data", "literals":["merge","storage"],
+       "argument":"nbt", "data_path":"custom.label"},
+      {"command":"say", "argument_index":1, "kind":"plain_string"}
+    ]
+  }
+}
+```
+
+Use `argument` to match a Brigadier argument name or `argument_index` (one-based) when the name is not stable.
+`literals` further restricts the command path. `data_path` descends into a parsed NBT argument;
+it is never matched against the raw command text.
+Macro commands are materialized from their caller/storage bindings before Brigadier parsing and pattern matching,
+so parameters retain their component type.
+
+For larger rule sets, put a relative file below the WTEM configuration directory in `patterns.files`:
+
+```json
+{"patterns":{"files":["patterns/my-pack.json"]}}
+```
+
+The external file has only the `json`, `saved_data`, and `commands` arrays shown above.
 
 ### Skipped text
 

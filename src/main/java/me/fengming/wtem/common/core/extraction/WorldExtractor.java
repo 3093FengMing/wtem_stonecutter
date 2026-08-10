@@ -23,6 +23,8 @@ import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.core.handler.EntityWHandler;
 import me.fengming.wtem.common.core.handler.datapack.ResourceHandler;
 import me.fengming.wtem.common.core.handler.datapack.ResourceHandlers;
+import me.fengming.wtem.common.core.handler.datapack.HandlerFactory;
+import me.fengming.wtem.common.core.handler.datapack.SimpleJsonHandler;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.DirectoryPublisher;
@@ -59,7 +61,6 @@ import net.minecraft.util.worldupdate.RegionStorageUpgrader;
 import net.minecraft.util.worldupdate.UpgradeProgress;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.storage.SavedDataStorage;
-import java.util.ArrayList;
 import java.util.concurrent.ThreadFactory;
 //?} else {
 /*import net.minecraft.network.chat.Component;
@@ -74,8 +75,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -285,9 +288,10 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                                                 + rl.getNamespace()
                                                 + "/"
                                                 + rl.getPath());
+                List<HandlerFactory> handlers = datapackHandlers();
                 for (String namespace : pack.getNamespaces(PackType.SERVER_DATA).stream().sorted().toList()) {
                     if (shouldStop()) break;
-                    for (var factory : ResourceHandlers.all()) {
+                    for (var factory : handlers) {
                         if (shouldStop()) break;
                         var handler = factory.newHandler(filePath, context);
                         if (!this.config.isResourceEnabled(handler.getPath())) continue;
@@ -350,6 +354,26 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /**
+     * Adds generic JSON handlers for exact custom resource directories. Built-in handlers remain
+     * authoritative for their directories; specialized handlers apply custom selectors themselves,
+     * so a resource is never opened and written twice.
+     */
+    private List<HandlerFactory> datapackHandlers() {
+        List<HandlerFactory> result = new ArrayList<>(ResourceHandlers.all());
+        var directories = new LinkedHashSet<>(ResourceHandlers.jsonDirectories());
+        for (var rule : this.config.patterns().json()) {
+            String resource = rule.resource();
+            if (resource.isBlank() || containsWildcard(resource) || !directories.add(resource)) continue;
+            result.add(SimpleJsonHandler.factory(resource));
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean containsWildcard(String value) {
+        return value.indexOf('*') >= 0 || value.indexOf('?') >= 0;
     }
 
     private Map<String, String> collectFunctionSources(PackResources pack) {

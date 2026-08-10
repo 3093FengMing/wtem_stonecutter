@@ -38,6 +38,7 @@ class WtemConfigTest {
         assertEquals(WtemConfig.DEFAULT_LANGUAGE_FILE, config.languageFile());
         assertEquals(WtemConfig.DEFAULT_SAVED_DATA_TEXT_FIELDS, config.savedDataTextFields());
         assertTrue(config.savedDataTextFields().contains("back_text"));
+        assertEquals(WtemConfig.DEFAULT.patterns(), config.patterns());
     }
 
     @Test
@@ -145,6 +146,43 @@ class WtemConfigTest {
 
         WtemConfig reloaded = WtemConfig.fromJson(configured.toJson(RESOURCE_DIRECTORIES));
         assertEquals(configured.savedDataTextFields(), reloaded.savedDataTextFields());
+    }
+
+    @Test
+    void readsAndRoundTripsInlineExtractionPatterns() {
+        WtemConfig configured =
+                parse(
+                        """
+                        {
+                          "patterns": {
+                            "json": [{"resource":"dialog","path":"body[*].contents"}],
+                            "saved_data": [{"file":"custom.dat","path":"entry.label","kind":"plain_string"}],
+                            "commands": [{"command":"say","argument_index":1,"kind":"plain_string"}]
+                          }
+                        }
+                        """);
+
+        assertEquals(1, configured.patterns().json().size());
+        assertEquals(1, configured.patterns().savedData().size());
+        assertEquals(1, configured.patterns().commands().size());
+        WtemConfig reloaded = WtemConfig.fromJson(configured.toJson(RESOURCE_DIRECTORIES));
+        assertEquals(configured.patterns(), reloaded.patterns());
+    }
+
+    @Test
+    void resolvesExternalPatternFilesRelativeToTheConfigDirectory(@TempDir Path directory)
+            throws Exception {
+        Files.writeString(
+                directory.resolve("patterns.json"),
+                "{\"json\":[{\"resource\":\"advancement\",\"path\":\"custom.title\"}]}");
+        JsonObject root =
+                JsonParser.parseString("{\"patterns\":{\"files\":[\"patterns.json\"]}}")
+                        .getAsJsonObject();
+
+        WtemConfig configured = WtemConfig.fromJson(root, directory);
+
+        assertEquals(1, configured.patterns().json().size());
+        assertEquals("custom.title", configured.patterns().json().getFirst().path().source());
     }
 
     @Test

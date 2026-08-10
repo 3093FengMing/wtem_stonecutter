@@ -1,6 +1,7 @@
 package me.fengming.wtem.common.core.handler.datapack;
 
 import java.util.List;
+import me.fengming.wtem.common.util.ResourceIds;
 
 /**
  * @author FengMing
@@ -31,6 +32,18 @@ public final class ResourceHandlers {
         ResourceHandler.Context context = ResourceHandler.Context.of(null, null, null, null);
         return handlers.stream()
                 .map(factory -> factory.newHandler(rl -> null, context).getPath())
+                .distinct()
+                .toList();
+    }
+
+    /** Returns directories already handled for ordinary JSON resources. */
+    public static List<String> jsonDirectories() {
+        ResourceHandler.Context context = ResourceHandler.Context.of(null, null, null, null);
+        var probe = ResourceIds.create("wtem", "probe.json");
+        return handlers.stream()
+                .map(factory -> factory.newHandler(rl -> null, context))
+                .filter(handler -> handler.accepts(probe))
+                .map(ResourceHandler::getPath)
                 .distinct()
                 .toList();
     }

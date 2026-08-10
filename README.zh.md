@@ -79,8 +79,6 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 | `reused`   | 该处文本是否复用了已有的键。`true` 表示它没有新增语言文件条目，改动这个键会同时影响多处。             |
 | `replaced` | 原始世界/数据包值是否已经替换为翻译组件。`false` 表示只加入目录，而不被提取替换。                     |
 
-同一个键出现在多处时，语言文件只有一条，报告则每处一行，因此报告的行数通常多于语言文件的条目数。取消提取或中途失败时，已写入的部分会连同语言文件一起写出。
-
 ### 警告类型
 
 警告不会中止提取。每条警告都会包含类型，以及触发它的源文件、资源 ID、命令或 NBT 路径。
@@ -100,6 +98,8 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 | `function_component_rewrite` | 函数中的文本组件或结构化参数无法安全改写。                                                     |
 | `function_selector_name`     | 无法解析看起来包含文本参数的选择器名称。                                                       |
 | `function_storage_string`    | `data modify storage ... set value` 直接向命令存储写入了裸字符串。                             |
+| `pattern_json_string`        | 自定义 JSON pattern 明确选中了裸字符串；它会进入目录但保持原样，需要人工复核。                 |
+| `pattern_command_string`     | 自定义命令 pattern 明确选中了裸字符串；参数会进入目录但保持原样，需要人工复核。                |
 | `function_macro_binding`     | 宏调用者或 storage 参数缺失、含义不明确，或无法静态解析。                                      |
 | `function_macro_restore`     | 无法为调用者恢复并校验实例化后的宏命令。                                                       |
 | `writable_book`              | 书与笔的 `writable_book_content.pages[*].raw` 被编目，但它不能替换为组件（`replaced=false`）。 |
@@ -206,6 +206,12 @@ YACL 并不是必选的，但我们强烈推荐你安装。
     "tooltip",
     "error_message"
   ],
+  "patterns": {
+    "files": [],
+    "json": [],
+    "saved_data": [],
+    "commands": []
+  },
   "filters": {
     "region": [],
     "datapack": [],
@@ -257,6 +263,7 @@ YACL 并不是必选的，但我们强烈推荐你安装。
 - `skipped_paths`：跳过数据包 `data/` 下指定目录中的资源，被跳过的资源不会写入伴生数据包。资源位置格式形如 `<命名空间>:<资源路径>`；例如 `animated_java:function` 匹配 `data/animated_java/function/**`。资源路径写为 `*` 可跳过整个命名空间。
 - `language_file`：写入世界目录的语言文件名。只接受纯文件名，包含路径分隔符或非 `.json` 后缀时会被忽略。
 - `saved_data_text_fields`：扫描 SavedData 时用于识别可能是文本组件的字段名。默认列表包含 `back_text`；选定 SavedData 范围内的其他字符串会保持原样，并记录 `saved_data_string` 警告，而不会猜测为文本。
+- `patterns`：带明确类型的自定义提取选择器。JSON 规则选择数据包资源目录和 `body[*].contents` 一类结构化路径；SavedData 规则选择 `.dat` 文件与 NBT 路径；命令规则选择 Brigadier 命令节点和已解析参数。规则默认追加到内建规则之后，`kind` 默认为 `component`；显式使用 `plain_string` 时只编目、不改写，并给出人工复核警告。`files` 可引用 WTEM 配置目录下的相对 JSON 文件，外部文件同样使用 `json`、`saved_data` 和 `commands` 数组。路径支持键、`[*]`、数字列表下标和转义点号；JSON、NBT、命令仍由 Gson/Minecraft codec/Brigadier 结构化解析，不使用正则解析这些语法。
 - `builtin_entries`：预置在语言文件中的条目。提取到的文本若与某条预置文本相同，就直接复用它的键，不再单独占一个键。默认预置空字符串、空格和 0~9。整段留空对象 `{}` 表示不预置任何条目；整段删掉则保持默认。
 
 - `filters`：统一的来源过滤。普通规则表示包含，`!` 开头表示排除，`*`/`?` 是通配符，排除优先。区域位置为 `dimension/chunk/x_z`，数据包位置为 `pack/namespace:path`，SavedData 位置为 `<data 下相对文件>.dat/<NBT 路径>`；`entity` 和 `block_entity` 匹配完整命名空间类型 ID。
@@ -264,6 +271,64 @@ YACL 并不是必选的，但我们强烈推荐你安装。
 - `outputs`：可开启按区块导出 SNBT，以及在世界根目录写入 schema JSON。
 - `ai_translation`：启用后会把完整语言目录一次性发送到 OpenAI 兼容的 Responses 或 chat-completions 接口。可以填写的 BaseURL，也可以填写完整的 `/responses` 或 `/chat/completions` URL；使用 BaseURL 时由 `protocol` 选择协议。`translation_prompt` 支持 `{target_language}` 占位符，`key_naming_prompt` 用于可选的 AI 语义键命名。
 - `resource_pack`：启用后会使用配置的资源包 `name` 导出资源包。资源包内容包括 `pack.mcmeta` 和 `assets/wtem/lang/` 下的语言文件。
+
+### 自定义提取 pattern
+
+`patterns` 是为 WTEM 尚未内置 schema 的数据包提供的追加式选择器。与内置规则并存。
+同一路径重复出现时优先使用内置规则，再使用自定义规则补充其他路径。
+pattern 只描述树结构，不负责解析文本或命令。解析均通过原版方法。
+
+`path` 使用点分隔的对象键、数字列表下标和列表通配符，例如：
+
+```text
+title
+body[*].contents
+entries[0].display.label
+payload.a\.b[1]       # 对象键实际为 a.b
+```
+
+`kind`：`plain_string` 或 `component`（默认）。`component` 使用原版的 codec，`plain_string` 则只记录裸字符串、保持原文不变，并记录警告。
+
+JSON 规则必选 `resource`、`path`，可选 `namespace`、`resource_path`、`kind`。
+- `resource`：数据包注册目录（如 `dialog`、`advancement`）。
+- `namespace` 和 `resource_path`：分别根据命名空间和资源路径匹配，支持 `*` 和 `?` 通配符。
+
+SavedData 规则必选 `file`、`path`，可选 `kind`。
+- `file`：匹配存档 `data/` 下的文件名，支持 `*` 和 `?` 通配符。
+其它普通 SavedData 字符串仍遵循原有的保守处理策略。
+
+命令规则选择 Brigadier 已解析的命令参数：
+
+```json
+{
+  "patterns": {
+    "json": [
+      {"resource":"dialog", "path":"body[*].contents"},
+      {"resource":"my_registry", "path":"display.label", "kind":"plain_string"}
+    ],
+    "saved_data": [
+      {"file":"custom.dat", "path":"entry.display_label"}
+    ],
+    "commands": [
+      {"command":"data", "literals":["merge","storage"],
+       "argument":"nbt", "data_path":"custom.label"},
+      {"command":"say", "argument_index":1, "kind":"plain_string"}
+    ]
+  }
+}
+```
+
+可以用 `argument` 匹配命令参数名，也可以用 `argument_index` 匹配参数索引。
+`literals` 可以进一步限制命令路径。`data_path` 会在已解析的 NBT 参数中继续向下选择，不对原始命令文本做匹配。
+宏命令会先根据调用链绑定实例化，再由原版解析并执行 pattern 匹配。
+
+规则较多时，可在 `patterns.files` 中引用配置目录下的相对文件：
+
+```json
+{"patterns":{"files":["patterns/my-pack.json"]}}
+```
+
+外部文件应只包含上面所示的 `json`、`saved_data` 和 `commands` 数组。
 
 ### 跳过的文本
 

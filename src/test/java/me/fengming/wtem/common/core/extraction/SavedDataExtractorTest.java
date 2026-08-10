@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import me.fengming.wtem.common.config.WtemConfig;
+import me.fengming.wtem.common.core.extraction.pattern.ExtractionPatterns;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 import me.fengming.wtem.common.core.extraction.source.SavedDataExtractor;
 import me.fengming.wtem.common.util.ResourceIo;
@@ -244,6 +245,43 @@ class SavedDataExtractorTest {
     }
 
     @Test
+    void appliesAnExactCustomSavedDataPathToAnOtherwiseUnknownField(@TempDir Path world) {
+        Path data = world.resolve("data");
+        writeField(data.resolve("custom.dat"), "display_label", "{\"text\":\"Configured SavedData\"}");
+        ExtractionPatterns patterns =
+                ExtractionPatterns.fromJson(
+                        com.google.gson.JsonParser.parseString(
+                                "{\"saved_data\":[{\"file\":\"custom.dat\",\"path\":\"entry.display_label\"}]}"));
+        WtemConfig config = configured(WtemConfig.Filters.DEFAULT, List.of(), patterns);
+        TranslationContext.setConfig(config);
+
+        new SavedDataExtractor(data, config, new ExtractionSession()).extract();
+
+        assertEquals(
+                Map.of("custom.entry.display_label", "Configured SavedData"),
+                TranslationContext.snapshot());
+    }
+
+    @Test
+    void explicitlyCatalogsAPlainSavedDataStringWithoutChangingItsType(@TempDir Path world) {
+        Path data = world.resolve("data");
+        writeField(data.resolve("custom.dat"), "display_label", "Visible SavedData");
+        ExtractionPatterns patterns =
+                ExtractionPatterns.fromJson(
+                        com.google.gson.JsonParser.parseString(
+                                "{\"saved_data\":[{\"file\":\"custom.dat\",\"path\":\"entry.display_label\",\"kind\":\"plain_string\"}]}"));
+        WtemConfig config = configured(WtemConfig.Filters.DEFAULT, List.of(), patterns);
+        TranslationContext.setConfig(config);
+        ExtractionSession session = new ExtractionSession();
+
+        new SavedDataExtractor(data, config, session).extract();
+
+        assertEquals(Map.of("custom.entry.display_label", "Visible SavedData"), TranslationContext.snapshot());
+        assertFalse(TranslationContext.records().getFirst().replaced());
+        assertEquals(0, session.report().modifiedSavedData());
+    }
+
+    @Test
     void usesConfiguredFieldNamesForPlainJsonStrings(@TempDir Path world) {
         Path data = world.resolve("data");
         writeField(data.resolve("custom.dat"), "custom_message", "{\"text\":\"Configured\"}");
@@ -342,6 +380,13 @@ class SavedDataExtractorTest {
 
     private static WtemConfig configured(
             WtemConfig.Filters filters, List<String> savedDataTextFields) {
+        return configured(filters, savedDataTextFields, WtemConfig.DEFAULT.patterns());
+    }
+
+    private static WtemConfig configured(
+            WtemConfig.Filters filters,
+            List<String> savedDataTextFields,
+            ExtractionPatterns patterns) {
         return new WtemConfig(
                 WtemConfig.DEFAULT.stages(),
                 WtemConfig.DEFAULT.resources(),
@@ -357,7 +402,8 @@ class SavedDataExtractorTest {
                 WtemConfig.DEFAULT.outputs(),
                 WtemConfig.DEFAULT.aiTranslation(),
                 WtemConfig.DEFAULT.resourcePack(),
-                savedDataTextFields);
+                savedDataTextFields,
+                patterns);
     }
 
     private static void writeField(Path file, String fieldName, String value) {

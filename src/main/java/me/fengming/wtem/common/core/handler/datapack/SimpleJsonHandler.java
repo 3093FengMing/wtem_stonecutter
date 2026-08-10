@@ -1,14 +1,11 @@
 package me.fengming.wtem.common.core.handler.datapack;
 
 import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Function;
-import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.ResourceIo;
-import me.fengming.wtem.common.util.TranslationUtils;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.IoSupplier;
 
@@ -31,17 +28,13 @@ public class SimpleJsonHandler extends ResourceHandler {
         List<String> list = this.context.targetPaths();
         if (list == null) throw new IllegalStateException("Missing component target paths");
         JsonElement root = ResourceIo.readJson(supplier, "");
-        if (!root.isJsonObject()) {
+        if (!root.isJsonObject() && !(list.isEmpty() && root.isJsonArray())) {
             throw new IllegalStateException("Resource root is not a JSON object: " + rl);
         }
 
-        JsonObject jsonObj = root.getAsJsonObject();
-        ChangeTracker tracker = new ChangeTracker();
-        for (String s : list) {
-            tracker.add(TranslationUtils.translateJsonElement(jsonObj, s));
-        }
-        if (tracker.isChanged()) ResourceIo.writeJson(getFilePath(rl), jsonObj);
-        return tracker.isChanged();
+        boolean changed = JsonPatternSupport.apply(root, getPath(), rl, list);
+        if (changed) ResourceIo.writeJson(getFilePath(rl), root);
+        return changed;
     }
 
 }

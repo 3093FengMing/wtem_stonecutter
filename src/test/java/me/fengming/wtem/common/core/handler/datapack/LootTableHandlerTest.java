@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.util.ResourceIds;
 import net.minecraft.SharedConstants;
 import net.minecraft.resources.Identifier;
@@ -42,7 +43,29 @@ class LootTableHandlerTest {
 
     @AfterEach
     void tearDown() {
+        WtemConfig.initialize(WtemConfig.DEFAULT);
         TranslationContext.release();
+    }
+
+    @Test
+    void appliesCustomPatternsToASpecializedJsonHandler() throws IOException {
+        JsonObject config = WtemConfig.DEFAULT.toJson(java.util.List.of("loot_table"));
+        config.add(
+                "patterns",
+                JsonParser.parseString(
+                        "{\"json\":[{\"resource\":\"loot_table\",\"path\":\"custom.label\"}]}"));
+        WtemConfig.initialize(WtemConfig.fromJson(config));
+
+        assertTrue(
+                handle(
+                        "{\"type\":\"chest\",\"custom\":{\"label\":{\"text\":\"Configured\"}}}"));
+
+        assertEquals("Configured", snapshot().get("datapack.example.chest.custom.label"));
+        assertTrue(
+                written()
+                        .getAsJsonObject("custom")
+                        .getAsJsonObject("label")
+                        .has("translate"));
     }
 
     @Test

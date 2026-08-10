@@ -19,6 +19,7 @@ import java.util.Random;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import me.fengming.wtem.common.Wtem;
+import me.fengming.wtem.common.core.extraction.pattern.ExtractionPatterns;
 import me.fengming.wtem.common.util.ResourceIo;
 
 /**
@@ -48,6 +49,7 @@ import me.fengming.wtem.common.util.ResourceIo;
  * @param aiTranslation settings for the optional OpenAI-compatible translation exporter
  * @param resourcePack settings for the optional client resource-pack exporter
  * @param savedDataTextFields field names that identify likely text components in SavedData
+ * @param patterns additional typed JSON/NBT/command extraction selectors
  *
  * @author FengMing
  */
@@ -66,7 +68,8 @@ public record WtemConfig(
         Outputs outputs,
         AiTranslation aiTranslation,
         ResourcePack resourcePack,
-        List<String> savedDataTextFields) {
+        List<String> savedDataTextFields,
+        ExtractionPatterns patterns) {
 
     public static final String FILE_NAME = "wtem.json";
     public static final String DEFAULT_LANGUAGE_FILE = "en_us.json";
@@ -107,7 +110,8 @@ public record WtemConfig(
                 Outputs.DEFAULT,
                 AiTranslation.DEFAULT,
                 ResourcePack.DEFAULT,
-                DEFAULT_SAVED_DATA_TEXT_FIELDS);
+                DEFAULT_SAVED_DATA_TEXT_FIELDS,
+                ExtractionPatterns.DEFAULT);
     }
 
     /** Keeps source compatibility for callers using the full pre-SavedData-field constructor. */
@@ -141,7 +145,44 @@ public record WtemConfig(
                 outputs,
                 aiTranslation,
                 resourcePack,
-                DEFAULT_SAVED_DATA_TEXT_FIELDS);
+                DEFAULT_SAVED_DATA_TEXT_FIELDS,
+                ExtractionPatterns.DEFAULT);
+    }
+
+    /** Keeps source compatibility for callers using the pre-pattern full constructor. */
+    public WtemConfig(
+            Map<Stage, Boolean> stages,
+            Map<String, Boolean> resources,
+            KeyReuse keyReuse,
+            KeyNaming keyNaming,
+            int nbtMaxDepth,
+            boolean rebuildNestedKeys,
+            Skipped skipped,
+            List<String> skippedPaths,
+            Map<String, String> builtinEntries,
+            String languageFile,
+            Filters filters,
+            Outputs outputs,
+            AiTranslation aiTranslation,
+            ResourcePack resourcePack,
+            List<String> savedDataTextFields) {
+        this(
+                stages,
+                resources,
+                keyReuse,
+                keyNaming,
+                nbtMaxDepth,
+                rebuildNestedKeys,
+                skipped,
+                skippedPaths,
+                builtinEntries,
+                languageFile,
+                filters,
+                outputs,
+                aiTranslation,
+                resourcePack,
+                savedDataTextFields,
+                ExtractionPatterns.DEFAULT);
     }
 
     /**
@@ -170,7 +211,8 @@ public record WtemConfig(
                     Outputs.DEFAULT,
                     AiTranslation.DEFAULT,
                     ResourcePack.DEFAULT,
-                    DEFAULT_SAVED_DATA_TEXT_FIELDS);
+                    DEFAULT_SAVED_DATA_TEXT_FIELDS,
+                    ExtractionPatterns.DEFAULT);
 
     private static volatile WtemConfig active = DEFAULT;
 
@@ -199,6 +241,7 @@ public record WtemConfig(
         aiTranslation = aiTranslation == null ? AiTranslation.DEFAULT : aiTranslation;
         resourcePack = resourcePack == null ? ResourcePack.DEFAULT : resourcePack;
         savedDataTextFields = normalizeSavedDataTextFields(savedDataTextFields);
+        patterns = patterns == null ? ExtractionPatterns.DEFAULT : patterns;
         // A non-positive limit would stop traversal before the outermost tag is read, which silently
         // extracts nothing at all. Treat it the same way as a malformed value.
         if (nbtMaxDepth < 1) nbtMaxDepth = DEFAULT_NBT_MAX_DEPTH;
@@ -272,7 +315,8 @@ public record WtemConfig(
         }
 
         try {
-            return fromJson(ResourceIo.readJson(() -> Files.newInputStream(file), ""));
+            return fromJson(
+                    ResourceIo.readJson(() -> Files.newInputStream(file), ""), directory);
         } catch (RuntimeException exception) {
             Wtem.LOGGER.error(
                     "Failed to read {}, continuing with the default settings", file, exception);
@@ -281,6 +325,11 @@ public record WtemConfig(
     }
 
     public static WtemConfig fromJson(JsonElement root) {
+        return fromJson(root, null);
+    }
+
+    /** Reads a config and resolves its optional pattern files relative to {@code directory}. */
+    public static WtemConfig fromJson(JsonElement root, Path directory) {
         if (!root.isJsonObject()) {
             throw new IllegalArgumentException("WTEM configuration root is not a JSON object");
         }
@@ -313,7 +362,8 @@ public record WtemConfig(
                 Outputs.fromJson(object(json, "outputs")),
                 AiTranslation.fromJson(object(json, "ai_translation")),
                 ResourcePack.fromJson(object(json, "resource_pack")),
-                savedDataTextFields(json));
+                savedDataTextFields(json),
+                ExtractionPatterns.fromJson(json.get("patterns"), directory));
     }
 
     /**
@@ -352,6 +402,7 @@ public record WtemConfig(
         json.add("builtin_entries", builtinJson);
         json.addProperty("language_file", this.languageFile);
         addStrings(json, "saved_data_text_fields", this.savedDataTextFields);
+        json.add("patterns", this.patterns.toJson());
         json.add("filters", this.filters.toJson());
         json.add("outputs", this.outputs.toJson());
         json.add("ai_translation", this.aiTranslation.toJson());
@@ -396,7 +447,8 @@ public record WtemConfig(
                 this.outputs,
                 this.aiTranslation,
                 this.resourcePack,
-                this.savedDataTextFields);
+                this.savedDataTextFields,
+                this.patterns);
     }
 
     /**
@@ -872,28 +924,7 @@ public record WtemConfig(
         private static boolean globMatches(String glob, String value) {
             // Keep configuration glob semantics without translating user input into a regular
             // expression: '*' matches any sequence and '?' matches one code unit.
-            int globIndex = 0;
-            int valueIndex = 0;
-            int lastStar = -1;
-            int valueAfterStar = -1;
-            while (valueIndex < value.length()) {
-                if (globIndex < glob.length()
-                        && (glob.charAt(globIndex) == '?'
-                                || glob.charAt(globIndex) == value.charAt(valueIndex))) {
-                    globIndex++;
-                    valueIndex++;
-                } else if (globIndex < glob.length() && glob.charAt(globIndex) == '*') {
-                    lastStar = globIndex++;
-                    valueAfterStar = valueIndex;
-                } else if (lastStar >= 0) {
-                    globIndex = lastStar + 1;
-                    valueIndex = ++valueAfterStar;
-                } else {
-                    return false;
-                }
-            }
-            while (globIndex < glob.length() && glob.charAt(globIndex) == '*') globIndex++;
-            return globIndex == glob.length();
+            return ExtractionPatterns.globMatches(glob, value);
         }
 
         public record Selection(

@@ -6,9 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.google.gson.JsonParser;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
@@ -35,8 +37,83 @@ class FunctionHandlerTest {
     @AfterEach
     void tearDown() {
         FunctionHandler.releaseParser();
+        WtemConfig.initialize(WtemConfig.DEFAULT);
         TranslationContext.release();
     }
+
+    @Test
+    void appliesAUserCommandRuleToTheBrigadierArgumentTree() {
+        var config =
+                WtemConfig.DEFAULT.toJson(List.of("function"));
+        config.add(
+                "patterns",
+                JsonParser.parseString(
+                        "{\"commands\":[{\"command\":\"say\",\"argument_index\":1,\"kind\":\"plain_string\"}]}"));
+        WtemConfig.initialize(WtemConfig.fromJson(config));
+
+        String source = "say A user-selected message";
+        String result = FunctionHandler.processFunction(source);
+
+        assertEquals(source, result);
+        assertEquals(
+                "A user-selected message",
+                TranslationContext.snapshot().get("datapack.test.function.message"));
+    }
+
+    @Test
+    void appliesAUserCommandRuleToASelectedNbtSubtree() {
+        var config = WtemConfig.DEFAULT.toJson(List.of("function"));
+        config.add(
+                "patterns",
+                JsonParser.parseString(
+                        "{\"commands\":[{\"command\":\"data\",\"literals\":[\"merge\",\"storage\"],\"argument\":\"nbt\",\"data_path\":\"custom.label\"}]}"));
+        WtemConfig.initialize(WtemConfig.fromJson(config));
+
+        String command =
+                "data merge storage test:runtime {custom:{label:{text:\"Configured command text\"}}}";
+        String result = FunctionHandler.processFunction(command);
+
+        assertNotEquals(command, result, result);
+        assertTrue(result.contains("translate"), result);
+        assertEquals(
+                "Configured command text",
+                TranslationContext.snapshot().get("datapack.test.function.nbt.custom.label"));
+    }
+
+    //? if >=1.21.8 {
+    @Test
+    void appliesAUserCommandRuleAfterMaterializingCallerStorage() {
+        var config = WtemConfig.DEFAULT.toJson(List.of("function"));
+        config.add(
+                "patterns",
+                JsonParser.parseString(
+                        "{\"commands\":[{\"command\":\"data\",\"literals\":[\"merge\",\"storage\"],\"argument\":\"nbt\",\"data_path\":\"custom.label\"}]}"));
+        WtemConfig.initialize(WtemConfig.fromJson(config));
+
+        String command =
+                "$data merge storage test:output {custom:{label:{text:\"Before $(marco) after\"}}}";
+        FunctionHandler.initializeMacroCallGraph(
+                Map.of(
+                        "test:caller.mcfunction",
+                                "data merge storage test:runtime {marco:{translate:\"known.request\"}}\n"
+                                        + "function test:pattern_target with storage test:runtime",
+                        "test:pattern_target.mcfunction", command));
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(),
+                new ExtractionDiagnostics());
+        TranslationContext.clear();
+        TranslationContext.setKey("datapack.test.pattern_target");
+
+        String result =
+                FunctionHandler.processFunction(command, "test:pattern_target.mcfunction");
+
+        assertTrue(result.contains("\"with\":[$(marco)]"), result);
+        assertEquals(
+                "Before %s after",
+                TranslationContext.snapshot()
+                        .get("datapack.test.pattern_target.nbt.custom.label"));
+    }
+    //?}
 
     @Test
     void translatesComponentSpanningContinuationLines() {
