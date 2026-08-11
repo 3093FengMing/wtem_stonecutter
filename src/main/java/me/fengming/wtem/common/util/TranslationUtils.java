@@ -7,10 +7,8 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.mojang.serialization.JsonOps;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+
+import java.util.*;
 import java.util.stream.Stream;
 
 import me.fengming.wtem.common.core.extraction.TranslationContext;
@@ -84,12 +82,10 @@ public final class TranslationUtils {
 
         try (var transaction = TranslationContext.beginTransaction()) {
             TransformResult result;
-            if (containsMacro(json)) {
-                result = translateComponentJson(json.deepCopy());
-            } else {
+            if (!containsMacro(json)) {
                 deserializeComponent(json);
-                result = translateComponentJson(json.deepCopy());
             }
+            result = translateComponentJson(json.deepCopy());
             if (!result.changed()) return json;
 
             if (!containsMacro(json)) deserializeComponent(result.value());
@@ -273,7 +269,7 @@ public final class TranslationUtils {
 
     private static Tag translateNbtComponentTag(
             Tag originalTag, String stringValue, boolean preferStructured) {
-        if (originalTag instanceof StringTag) {
+        if (originalTag instanceof StringTag stringTag) {
             // A string tag means one of two different things. Legacy saves store a whole component
             // serialized to JSON in one, while the component format reads a string as the literal
             // text of a component in its own right. Which one it is decides the form the
@@ -307,8 +303,16 @@ public final class TranslationUtils {
 
             Component component;
             try {
-                component = deserializeNbtComponent(originalTag);
-            } catch (JsonParseException | IllegalStateException ignoredException) {
+                //~ if >=1.21.5 '.getAsString()' -> '.value()'
+                component = deserializeComponent(Optional.of(stringTag.value())
+                    .map(JsonParser::parseString).orElseThrow());
+            } catch (JsonParseException ignoredException) {
+                try {
+                    component = deserializeNbtComponent(originalTag);
+                } catch (IllegalStateException | JsonParseException ignoredException2) {
+                    return originalTag;
+                }
+            } catch (IllegalStateException | NoSuchElementException ignoredException) {
                 return originalTag;
             }
 

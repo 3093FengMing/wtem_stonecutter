@@ -148,7 +148,7 @@ public class WtemScreen extends Screen {
                                                 //? if >=26.2 {
                                                 this.minecraft.setScreenAndShow(config);
                                                 //?} else {
-                                                /*this.minecraft.setScreen(config);
+                                                /*this.minecraft.setScreenAndShow(config);
                                                 *///?}
                                             } catch (RuntimeException exception) {
                                                 this.navigatingToChild = false;
@@ -174,7 +174,7 @@ public class WtemScreen extends Screen {
                                                 //? if >=26.2 {
                                                 this.minecraft.setScreenAndShow(selection);
                                                 //?} else {
-                                                /*this.minecraft.setScreen(selection);
+                                                /*this.minecraft.setScreenAndShow(selection);
                                                 *///?}
                                             } catch (RuntimeException exception) {
                                                 this.navigatingToChild = false;
@@ -282,7 +282,7 @@ public class WtemScreen extends Screen {
         // Keep this row in the live extraction layout even while the worker has not reported a
         // warning yet.  Diagnostics are appended from the extraction thread; conditionally
         // creating the row made the status area appear to lose the warning counter when the first
-        // frame was rendered before a parser warning arrived.
+        // frame was extractRenderStateed before a parser warning arrived.
         int warnings = report.failures().size();
         guiGraphics.text(
                 this.font,

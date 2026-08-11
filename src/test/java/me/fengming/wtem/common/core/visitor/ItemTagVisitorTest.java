@@ -393,6 +393,20 @@ class ItemTagVisitorTest {
         assertEquals(Map.of(), TranslationContext.snapshot());
     }
 
+    @Test
+    void visitAMixedItem() {
+        CompoundTag components = nbt("""
+                {"minecraft:custom_name":"{\\"translate\\":\\"minecraft.block.light_blue_wool\\"}",
+                "minecraft:lore":["{\\"text\\":\\"Lore0\\"}", "{\\"translate\\":\\"lore1.name\\"}"]
+                }
+                """);
+
+        ItemTagVisitor visitor = new ItemTagVisitor();
+        visitor.visitComponents("light_blue_wool", components);
+
+        assertEquals(Map.of("item.light_blue_wool.1.lore.line0", "Lore0"), TranslationContext.snapshot());
+    }
+
     private static Map<String, String> visit(String json) {
         ItemTagVisitor visitor = new ItemTagVisitor();
         nbt(json).accept(visitor);
