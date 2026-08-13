@@ -714,6 +714,30 @@ class FunctionHandlerTest {
         assertEquals(1, TranslationContext.snapshot().size(), TranslationContext.snapshot()::toString);
     }
 
+    //? if >=1.21.9 {
+    @Test
+    void extractTextsInHoverOrClickEventWithoutLiteral() {
+        String command = "tellraw @s [{\"atlas\":\"items\",\"bold\":false,\"click_event\":{\"action\":\"run_command\",\"command\":\"/trigger shanger.settings set 122\"},\"color\":\"white\",\"hover_event\":{\"action\":\"show_text\",\"value\":[{\"text\":\"Display Totems Popped on Player List\"}]},\"sprite\":\"item/totem_of_undying\"}]";
+
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertEquals(1, TranslationContext.snapshot().size(), result);
+        assertTrue(result.contains("\"translate\""), result);
+        assertTrue(
+                TranslationContext.snapshot().containsValue("Display Totems Popped on Player List"),
+                TranslationContext.snapshot()::toString);
+    }
+    //?}
+
+    @Test
+    void extractTextsWithStringsThatCannotBeMergedInJsonArray() {
+        String command = "tellraw @s [{\"text\":\"abc123\", \"color\":\"red\"}, \"xxx\", {\"text\":\"321abc\", \"color\":\"blue\"}]";
+
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertEquals(3, TranslationContext.snapshot().size(), TranslationContext.snapshot()::toString);
+    }
+
     private static String mergeContinuationLines(String value) {
         StringBuilder merged = new StringBuilder(value.length());
         for (int index = 0; index < value.length(); index++) {

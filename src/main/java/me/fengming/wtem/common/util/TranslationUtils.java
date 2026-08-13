@@ -486,7 +486,7 @@ public final class TranslationUtils {
      */
     private static TransformResult translateComponentArray(JsonArray source) {
         JsonArray result = new JsonArray();
-        boolean changed = false;
+        ChangeTracker tracker = new ChangeTracker();
         int cursor = 0;
         while (cursor < source.size()) {
             JsonElement element = source.get(cursor);
@@ -518,20 +518,24 @@ public final class TranslationUtils {
             for (int i = cursor; i < end; i++) group.add(source.get(i).deepCopy());
             TransformResult translated = translateComponentGroup(group);
             result.add(translated.value());
-            changed |= translated.changed();
+            tracker.add(translated.changed());
             cursor = end;
         }
-        return new TransformResult(result, changed);
+
+        return new TransformResult(result, tracker.isChanged());
     }
 
     private static TransformResult translateComponentGroup(List<JsonElement> group) {
         JsonObject anchor = null;
         StringBuilder template = new StringBuilder();
         JsonArray arguments = new JsonArray();
+        JsonArray translatedGroup = new JsonArray();
+        ChangeTracker nestedChanges = new ChangeTracker();
         boolean hasText = false;
 
         for (JsonElement element : group) {
             if (isTextElement(element)) {
+                translatedGroup.add(element.deepCopy());
                 JsonObject text =
                         element.isJsonObject()
                                 ? element.getAsJsonObject()
@@ -539,22 +543,24 @@ public final class TranslationUtils {
                 String literal =
                         element.isJsonPrimitive() ? element.getAsString() : text.get("text").getAsString();
                 if (anchor == null && element.isJsonObject()) anchor = text;
-                if (literal.isBlank()) continue;
+                if (literal.isEmpty()) continue;
                 hasText = true;
                 appendTextTemplate(literal, template, arguments);
             } else {
                 TransformResult translated = translateComponentJson(element);
                 JsonElement argument = translated.value();
+                translatedGroup.add(argument.deepCopy());
+                nestedChanges.add(translated.changed());
                 template.append("%s");
                 arguments.add(argument.deepCopy());
             }
         }
 
         if (!hasText) {
-            if (group.size() == 1) return translateComponentJson(group.getFirst());
-            JsonArray unchanged = new JsonArray();
-            group.forEach(unchanged::add);
-            return TransformResult.unchanged(unchanged);
+            JsonElement value = translatedGroup.size() == 1
+                    ? translatedGroup.get(0)
+                    : translatedGroup;
+            return new TransformResult(value, nestedChanges.isChanged());
         }
 
         JsonObject translated = translatedTextObject(template.toString(), arguments, anchor);
@@ -582,7 +588,9 @@ public final class TranslationUtils {
         JsonObject object = element.getAsJsonObject();
         return Stream.of(
             "translate", "score", "selector",
-                "nbt", "keybind", "object")
+                "nbt", "keybind", "object", CLICK_EVENT,
+                HOVER_EVENT, LEGACY_CLICK_EVENT,
+                LEGACY_HOVER_EVENT)
             .anyMatch(object::has);
     }
 
@@ -755,6 +763,7 @@ public final class TranslationUtils {
                 return tracker.isChanged();
             }
         }
+
         return false;
     }
 

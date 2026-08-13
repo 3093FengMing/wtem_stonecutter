@@ -120,6 +120,20 @@ class TranslationUtilsTest {
     }
 
     @Test
+    void propagatesChangesFromAnEventOnlyComponent() {
+        JsonElement source =
+                JsonParser.parseString(
+                        "[{\"click_event\":{\"action\":\"run_command\",\"command\":\"/trigger test set 1\"},"
+                                + "\"hover_event\":{\"action\":\"show_text\",\"value\":[{\"text\":\"Hover text\"}]}}]");
+
+        JsonElement result = TranslationUtils.translateDecodedTree(source);
+
+        assertFalse(result.equals(source), result::toString);
+        assertTrue(result.toString().contains("\"translate\""), result::toString);
+        assertEquals(Map.of("datapack.test.dialog", "Hover text"), TranslationContext.snapshot());
+    }
+
+    @Test
     void foldsAComponentArgumentBetweenLiteralSiblingsIntoOneTranslation() {
         JsonElement result =
                 TranslationUtils.translateLiteral(
