@@ -332,6 +332,26 @@ class BlockEntityWHandlerTest {
     }
 
     @Test
+    void keepsSerializedEmptySignLinesBlank() {
+        String command =
+                "setblock 1182 71 1045 minecraft:birch_sign[rotation=10,waterlogged=false]"
+                        + "{back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},"
+                        + "front_text:{color:\"red\",has_glowing_text:1b,messages:['\"\"','\"\u041a \u0412 \u0410 \u0421\"','\"-----------}\"','\"\"']},"
+                        + "is_waxed:0b}";
+
+        String result = FunctionHandler.processFunction(command);
+
+        assertEquals(
+                Map.of(
+                        "sign.1.front_text.1", "\u041a \u0412 \u0410 \u0421",
+                        "sign.1.front_text.2", "-----------}"),
+                TranslationContext.snapshot(),
+                result);
+        assertFalse(result.contains("sign.1.front_text.0"), result);
+        assertFalse(result.contains("sign.1.front_text.3"), result);
+    }
+
+    @Test
     void translatesCommandBlockOutputAndCommand() {
         CompoundTag commandBlock = nbt(COMMAND_BLOCK);
 

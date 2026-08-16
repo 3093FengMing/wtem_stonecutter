@@ -72,11 +72,8 @@ public final class StructuredCommandArgumentAdapter {
             int tagStart = sourceArgument.indexOf('{');
             if (tagStart < 0) return Optional.empty();
             try {
-                //? if >=1.21.5 {
+                //~ if >=1.21.5 '.parseTag' -> '.parseCompoundFully'
                 sourceTag = TagParser.parseCompoundFully(sourceArgument.substring(tagStart));
-                //?} else {
-                /*sourceTag = TagParser.parseTag(sourceArgument.substring(tagStart));
-                *///?}
             } catch (CommandSyntaxException | RuntimeException ignored) {
                 return Optional.empty();
             }
@@ -85,11 +82,8 @@ public final class StructuredCommandArgumentAdapter {
         CompoundTag translatedTag = sourceTag.copy();
         boolean temporaryId = !translatedTag.contains("id");
         if (temporaryId) {
-            var blockHolder =
-                    //? if >=26.1 {
-                    input.getState().typeHolder();
-                    //?} else
-                    //input.getState().getBlockHolder();
+            //~ if >=26.1 '.getBlockHolder()' -> '.typeHolder()'
+            var blockHolder = input.getState().typeHolder();
             blockHolder.unwrapKey()
                     .map(ResourceIds::key)
                     .map(StructuredCommandArgumentAdapter::blockEntityId)
@@ -106,16 +100,16 @@ public final class StructuredCommandArgumentAdapter {
         return Optional.of(sourceArgument.substring(0, tagStart) + translatedTag);
     }
 
-    /** Maps a coloured block-state id to the shared block-entity id used by its NBT schema. */
+    /** Maps a block variant id to the shared block-entity id used by its NBT schema. */
     private static String blockEntityId(String blockId) {
         if (blockId == null || blockId.isBlank()) return blockId;
         int namespace = blockId.indexOf(':');
         String path = namespace < 0 ? blockId : blockId.substring(namespace + 1);
         String prefix = namespace < 0 ? "" : blockId.substring(0, namespace + 1);
-        if (path.endsWith("_wall_sign") || "sign".equals(path)) return prefix + "sign";
         if (path.endsWith("_hanging_sign") || "hanging_sign".equals(path)) {
             return prefix + "hanging_sign";
         }
+        if (path.endsWith("_sign") || "sign".equals(path)) return prefix + "sign";
         return blockId;
     }
 

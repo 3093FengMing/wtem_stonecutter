@@ -3,6 +3,7 @@ package me.fengming.wtem.common.core.handler.datapack.command;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -310,7 +311,7 @@ final class MacroCommandMaterializer {
                 if (structuredComponentMacros.contains(name)) {
                     String sentinel = "__wtem_component_macro_" + sentinels.size() + "__";
                     sentinels.put(sentinel, name);
-                    return new com.google.gson.JsonPrimitive(sentinel);
+                    return new JsonPrimitive(sentinel);
                 }
             }
         }
