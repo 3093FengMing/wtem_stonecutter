@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.JsonParser;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import java.util.Map;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
@@ -14,6 +15,8 @@ import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.util.NbtUtils;
 import net.minecraft.SharedConstants;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.TagParser;
 import net.minecraft.server.Bootstrap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -332,7 +335,8 @@ class BlockEntityWHandlerTest {
     }
 
     @Test
-    void keepsSerializedEmptySignLinesBlank() {
+    void keepsSerializedEmptySignLinesBlank() throws CommandSyntaxException {
+        TranslationContext.setBuiltinEntries(WtemConfig.DEFAULT.builtinEntries());
         String command =
                 "setblock 1182 71 1045 minecraft:birch_sign[rotation=10,waterlogged=false]"
                         + "{back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},"
@@ -341,14 +345,29 @@ class BlockEntityWHandlerTest {
 
         String result = FunctionHandler.processFunction(command);
 
-        assertEquals(
-                Map.of(
-                        "sign.1.front_text.1", "\u041a \u0412 \u0410 \u0421",
-                        "sign.1.front_text.2", "-----------}"),
-                TranslationContext.snapshot(),
-                result);
+        Map<String, String> entries = TranslationContext.snapshot();
+        assertEquals(2, TranslationContext.extractedEntryCount(), entries::toString);
+        assertEquals("", entries.get("wtem.blank"));
+        assertEquals("\u041a \u0412 \u0410 \u0421", entries.get("sign.1.front_text.1"));
+        assertEquals("-----------}", entries.get("sign.1.front_text.2"));
+        assertFalse(entries.containsValue("\"\""), entries::toString);
         assertFalse(result.contains("sign.1.front_text.0"), result);
         assertFalse(result.contains("sign.1.front_text.3"), result);
+
+        int tagStart = result.indexOf('{');
+        assertTrue(tagStart >= 0, result);
+        //~ if >=1.21.5 '.parseTag' -> '.parseCompoundFully'
+        CompoundTag translated = TagParser.parseCompoundFully(result.substring(tagStart));
+        assertSerializedBlankLines(translated, "back_text", 0, 1, 2, 3);
+        assertSerializedBlankLines(translated, "front_text", 0, 3);
+    }
+
+    private static void assertSerializedBlankLines(
+            CompoundTag sign, String side, int... indexes) {
+        ListTag messages = NbtUtils.getList(NbtUtils.getCompound(sign, side), "messages");
+        for (int index : indexes) {
+            assertEquals("\"\"", NbtUtils.getString(messages, index), sign::toString);
+        }
     }
 
     @Test
