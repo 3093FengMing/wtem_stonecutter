@@ -96,6 +96,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 | `function_command`           | 已解析的命令无法处理。                                                                         |
 | `function_reparse`           | 改写后的命令未通过重新解析校验。                                                               |
 | `function_component_rewrite` | 函数中的文本组件或结构化参数无法安全改写。                                                     |
+| `function_item_component`    | 函数中的物品组件值未通过 Minecraft codec；WTEM 仍提取已知文本，并保留原始值。                 |
 | `function_selector_name`     | 无法解析看起来包含文本参数的选择器名称。                                                       |
 | `function_storage_string`    | `data modify storage ... set value` 直接向命令存储写入了裸字符串。                             |
 | `pattern_json_string`        | 自定义 JSON pattern 明确选中了裸字符串；它会进入目录但保持原样，需要人工复核。                 |
@@ -104,6 +105,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 | `function_macro_restore`     | 无法为调用者恢复并校验实例化后的宏命令。                                                       |
 | `writable_book`              | 书与笔的 `writable_book_content.pages[*].raw` 被编目，但它不能替换为组件（`replaced=false`）。 |
 | `written_book_string`        | 成书中的 `author` 等普通字符串保持原样。                                                       |
+| `item_component`             | 物品组件值未通过 Minecraft codec 时会保持原样，WTEM 同时继续提取其中已知的文本字段。           |
 | `generated_structure`        | 无法读取或改写世界生成结构。                                                                   |
 | `language`                   | 无法写出主要语言文件。                                                                         |
 | `manifest`                   | 无法写出 CSV 提取报告。                                                                        |

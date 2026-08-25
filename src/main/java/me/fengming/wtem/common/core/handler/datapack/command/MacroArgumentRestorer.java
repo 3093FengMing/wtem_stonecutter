@@ -11,8 +11,9 @@ import java.util.Set;
  * <p>The parser needs concrete stand-ins for non-text macros. Text-component macros remain in the
  * parser input so the translation utility can emit them as {@code with} arguments; resolved
  * non-text macros are written as caller values. The important invariant is that any fallback
- * restoration is range based: it may restore a complete source token, never an arbitrary
- * occurrence of a short mask such as {@code 1} in the serialized command.
+ * restoration is range based: it may restore a complete source token.
+ *
+ * @author FengMing
  */
 final class MacroArgumentRestorer {
     private MacroArgumentRestorer() {}

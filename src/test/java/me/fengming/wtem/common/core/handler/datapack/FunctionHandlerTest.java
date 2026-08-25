@@ -229,7 +229,7 @@ class FunctionHandlerTest {
     // The supplied command uses the 26.2 writable-book component codec. The block-entity-level
     // regression test covers the same NBT path on every supported version.
     //? if >=26.2 {
-    @Test
+    /*@Test
     void catalogsLecternWritableBookPagesFromTheSuppliedSetblockCommand() {
         String command =
                 """
@@ -249,7 +249,7 @@ class FunctionHandlerTest {
                         .startsWith("[ 붕어빵 결합 ]"));
         assertTrue(TranslationContext.records().stream().noneMatch(record -> record.replaced()));
     }
-    //?}
+    *///?}
 
     @Test
     void translatesMacroLineWithoutInterpolations() {
@@ -371,7 +371,7 @@ class FunctionHandlerTest {
     }
 
     //? if >=26.2 {
-    @Test
+    /*@Test
     void doesNotEmbedAComponentValueIntoAQuotedScalarMacroField() {
         String command =
                 "$dialog show @s {\"type\":\"minecraft:multi_action\","
@@ -404,7 +404,7 @@ class FunctionHandlerTest {
                                                 && failure.cause() == null),
                 diagnostics.failures()::toString);
     }
-    //?}
+    *///?}
 
     //? if >=1.21.8 {
     @Test
@@ -435,7 +435,7 @@ class FunctionHandlerTest {
     // caller binding is materialized before command extraction and that the original macros are
     // restored after nested dialog components and action commands have been translated.
     //? if >=26.2 {
-    @Test
+    /*@Test
     void materializesACompleteDialogMacroFromItsKnownCallerBinding() {
         String command =
                 "$dialog show @s {\"type\":\"minecraft:multi_action\","
@@ -481,7 +481,7 @@ class FunctionHandlerTest {
                         .noneMatch(value -> value.contains("known.event") || value.equals("5") || value.equals("yellow")),
                 TranslationContext.snapshot()::toString);
     }
-    //?}
+    *///?}
 
     @Test
     void translatesMacroLineArgumentBesideAnInterpolatedArgument() {
@@ -612,6 +612,97 @@ class FunctionHandlerTest {
                 TranslationContext.snapshot().values().stream()
                         .anyMatch(value -> value.contains("저장:")),
                 TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void extractsItemCustomNameFromSummonWhenCustomDataCannotBeDecoded() {
+        String command =
+                "summon item 168 -12 -166 "
+                        + "{Item:{id:yellow_dye,count:1,components:{"
+                        + "custom_name:'[\"\",{\"text\":\"The orange key\",\"italic\":false}]',"
+                        + "custom_data:key_barn,can_break:{blocks:[glass]}}}}";
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String result = FunctionHandler.processFunction(command, "test:item_summon.mcfunction");
+
+        assertTrue(
+                TranslationContext.snapshot().containsValue("The orange key"),
+                TranslationContext.snapshot()::toString);
+        assertTrue(result.contains("custom_data:\"key_barn\""), result);
+        ExtractionDiagnostics.Failure warning =
+                diagnostics.failures().stream()
+                        .filter(failure -> "function_item_component".equals(failure.scope()))
+                        .findFirst()
+                        .orElseThrow();
+        assertEquals(null, warning.cause());
+        assertTrue(warning.displayMessage().contains("custom_data"), warning.displayMessage());
+        assertTrue(warning.resource().contains("test:function/item_summon.mcfunction"), warning.resource());
+        assertTrue(warning.resource().contains("line 1"), warning.resource());
+        assertTrue(warning.resource().contains("command summon item"), warning.resource());
+        assertTrue(warning.resource().contains("yellow_dye"), warning.resource());
+    }
+
+    @Test
+    void acceptsStringEncodedCustomDataCompoundInSummon() {
+        String command =
+                "summon item 168 -12 -166 "
+                        + "{Item:{id:yellow_dye,count:1,components:{"
+                        + "custom_name:'[\"\",{\"text\":\"The orange key\",\"italic\":false}]',"
+                        + "custom_data:'{key_barn:1b}',can_break:{blocks:[glass]}}}}";
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String result = FunctionHandler.processFunction(command, "test:item_summon.mcfunction");
+
+        assertTrue(
+                TranslationContext.snapshot().containsValue("The orange key"),
+                TranslationContext.snapshot()::toString);
+        assertTrue(result.contains("key_barn:1b"), result);
+        assertTrue(
+                diagnostics.failures().stream()
+                        .noneMatch(
+                                failure ->
+                                        "function_item_component".equals(failure.scope())),
+                diagnostics.failures()::toString);
+    }
+
+    @Test
+    void reportsInvalidComponentsOnItemsNestedInSummonBlockEntityData() {
+        String command =
+                "summon item 168 -12 -166 "
+                        + "{Item:{id:chest,count:1,components:{block_entity_data:{id:chest,"
+                        + "Items:[{Slot:0b,id:yellow_dye,count:1,components:{"
+                        + "custom_name:'{\"text\":\"Nested orange key\"}',"
+                        + "custom_data:key_barn}}]}}}}";
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String result =
+                FunctionHandler.processFunction(command, "test:nested_item_summon.mcfunction");
+
+        assertTrue(
+                TranslationContext.snapshot().containsValue("Nested orange key"),
+                TranslationContext.snapshot()::toString);
+        assertTrue(result.contains("custom_data:\"key_barn\""), result);
+        ExtractionDiagnostics.Failure warning =
+                diagnostics.failures().stream()
+                        .filter(failure -> "function_item_component".equals(failure.scope()))
+                        .findFirst()
+                        .orElseThrow();
+        assertEquals(null, warning.cause());
+        assertTrue(warning.displayMessage().contains("custom_data"), warning.displayMessage());
+        assertTrue(
+                warning.resource().contains("test:function/nested_item_summon.mcfunction"),
+                warning.resource());
+        assertTrue(warning.resource().contains("line 1"), warning.resource());
+        assertTrue(warning.resource().contains("command summon item"), warning.resource());
+        assertTrue(warning.resource().contains("minecraft:item"), warning.resource());
+        assertTrue(warning.resource().contains("yellow_dye"), warning.resource());
+        assertTrue(warning.resource().contains("key item.chest.1"), warning.resource());
     }
 
     @Test

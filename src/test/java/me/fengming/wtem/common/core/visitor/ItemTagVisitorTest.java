@@ -73,6 +73,53 @@ class ItemTagVisitorTest {
     }
 
     @Test
+    void recognizesDefaultNamespaceComponentNamesWhenThePatchIsNotCodecNormalized() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        TranslationContext.setDiagnostics(diagnostics);
+        CompoundTag item =
+                nbt(
+                                "{\"id\":\"minecraft:yellow_dye\",\"components\":{"
+                                + "\"custom_name\":\"{\\\"text\\\":\\\"Orange key\\\"}\","
+                                + "\"custom_data\":\"key_barn\"}}");
+
+        ItemTagVisitor visitor = new ItemTagVisitor();
+        item.accept(visitor);
+
+        assertTrue(visitor.isChanged());
+        assertEquals(
+                Map.of("item.yellow_dye.1.name", "Orange key"),
+                TranslationContext.snapshot());
+        ExtractionDiagnostics.Failure warning =
+                diagnostics.failures().stream()
+                        .filter(failure -> "item_component".equals(failure.scope()))
+                        .findFirst()
+                        .orElseThrow();
+        assertTrue(warning.resource().contains("item.yellow_dye"), warning.resource());
+        assertTrue(warning.resource().contains("key item.yellow_dye.1"), warning.resource());
+        assertTrue(warning.displayMessage().contains("custom_data"), warning.displayMessage());
+    }
+
+    @Test
+    void acceptsCustomDataEncodedAsACompoundSnbtString() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        TranslationContext.setDiagnostics(diagnostics);
+        CompoundTag item =
+                nbt(
+                        "{\"id\":\"minecraft:yellow_dye\",\"components\":{"
+                                + "\"custom_name\":\"{\\\"text\\\":\\\"Orange key\\\"}\","
+                                + "\"custom_data\":\"{key_barn:1b}\"}}");
+
+        ItemTagVisitor visitor = new ItemTagVisitor();
+        item.accept(visitor);
+
+        assertTrue(visitor.isChanged());
+        assertEquals(
+                Map.of("item.yellow_dye.1.name", "Orange key"),
+                TranslationContext.snapshot());
+        assertTrue(diagnostics.failures().isEmpty(), diagnostics.failures()::toString);
+    }
+
+    @Test
     void skipsItemsWithoutAnId() {
         CompoundTag item = nbt("""
                 {"components":{"minecraft:custom_name":"{\\"text\\":\\"Wand\\"}"}}

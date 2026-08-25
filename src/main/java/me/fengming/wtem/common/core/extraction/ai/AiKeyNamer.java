@@ -7,7 +7,8 @@ import me.fengming.wtem.common.Wtem;
 import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.service.ExtractionSession;
 
-/** On-demand semantic key naming with caching, validation, and a run-scoped circuit breaker.
+/**
+ * On-demand semantic key naming with caching, validation, and a run-scoped circuit breaker.
  *
  * @author FengMing
  */

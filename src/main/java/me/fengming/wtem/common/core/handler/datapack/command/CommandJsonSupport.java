@@ -14,6 +14,8 @@ import java.util.Optional;
  * narrow fallback needed when unresolved macros prevent Brigadier from producing a complete
  * component argument range. Keeping the small lexer here separate makes that boundary explicit
  * and keeps command argument handling focused on Minecraft's parsed values.
+ *
+ * @author FengMing
  */
 final class CommandJsonSupport {
     private static final List<String> COMPONENT_KEYWORDS =

@@ -24,6 +24,7 @@ import net.minecraft.commands.arguments.item.ItemInput;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.component.DataComponentPatch;
 import net.minecraft.data.registries.VanillaRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -733,13 +734,23 @@ final class CommandParseSupport {
             //?}
             case ItemInput itemInput -> {
                 replacement =
-                        StructuredCommandArgumentAdapter.translateItem(itemInput, registries)
+                        StructuredCommandArgumentAdapter.translateItem(
+                                        itemInput,
+                                        registries,
+                                        components ->
+                                                validateItemComponents(
+                                                        command, components, registries))
                                 .orElse(null);
                 if (replacement == null) return null;
             }
             case BlockInput blockInput -> {
                 replacement =
-                        StructuredCommandArgumentAdapter.translateBlock(blockInput, sourceArgument)
+                        StructuredCommandArgumentAdapter.translateBlock(
+                                        blockInput,
+                                        sourceArgument,
+                                        components ->
+                                                validateItemComponents(
+                                                        command, components, registries))
                                 .orElse(null);
                 if (replacement == null) return null;
             }
@@ -751,7 +762,10 @@ final class CommandParseSupport {
                     CommandArgumentSupport.findEntityId(context, command)
                             .ifPresent(id -> translatedTag.putString("id", id));
                 }
-                EntityTagVisitor entityVisitor = new EntityTagVisitor();
+                EntityTagVisitor entityVisitor =
+                        new EntityTagVisitor(
+                                components ->
+                                        validateItemComponents(command, components, registries));
                 translatedTag.accept(entityVisitor);
                 boolean changed = entityVisitor.isChanged();
                 // EntityTagVisitor knows the full entity schema.  The text-only pass is also
@@ -808,6 +822,27 @@ final class CommandParseSupport {
             return parsed instanceof ListTag list ? list : fallback.copy();
         } catch (Exception ignored) {
             return fallback.copy();
+        }
+    }
+
+    private static void validateItemComponents(
+            String command, CompoundTag components, HolderLookup.Provider registries) {
+        if (components == null || components.isEmpty()) return;
+        try {
+            var ops = registries.createSerializationContext(NbtOps.INSTANCE);
+            DataComponentPatch.CODEC
+                    .parse(ops, components)
+                    .error()
+                    .ifPresent(
+                            error ->
+                                    recordCommandWarning(
+                                            "function_item_component",
+                                            command,
+                                            "Invalid item components were preserved while WTEM"
+                                                    + " extracted known text fields: "
+                                                    + error));
+        } catch (RuntimeException exception) {
+            recordCommandFailure("function_item_component", command, exception);
         }
     }
 

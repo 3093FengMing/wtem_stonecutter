@@ -4,6 +4,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.serialization.DynamicOps;
 import java.util.Comparator;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.core.visitor.ItemTagVisitor;
@@ -32,7 +33,9 @@ public final class StructuredCommandArgumentAdapter {
     private StructuredCommandArgumentAdapter() {}
 
     public static Optional<String> translateItem(
-            ItemInput input, HolderLookup.Provider registries) {
+            ItemInput input,
+            HolderLookup.Provider registries,
+            Consumer<CompoundTag> componentValidator) {
         Holder<Item> item = input.item;
         DataComponentPatch patch = input.components;
         DynamicOps<Tag> ops = registries.createSerializationContext(NbtOps.INSTANCE);
@@ -51,7 +54,7 @@ public final class StructuredCommandArgumentAdapter {
                                 () ->
                                         new IllegalStateException(
                                                 "Item command argument has no registered item id"));
-        ItemTagVisitor visitor = new ItemTagVisitor();
+        ItemTagVisitor visitor = new ItemTagVisitor(componentValidator);
         visitor.visitComponents(itemId, components);
         if (!visitor.isChanged()) return Optional.empty();
 
@@ -62,7 +65,10 @@ public final class StructuredCommandArgumentAdapter {
         return Optional.of(serializeItem(itemId, translatedPatch, ops));
     }
 
-    public static Optional<String> translateBlock(BlockInput input, String sourceArgument) {
+    public static Optional<String> translateBlock(
+            BlockInput input,
+            String sourceArgument,
+            Consumer<CompoundTag> componentValidator) {
         CompoundTag sourceTag = input.tag;
         if (sourceTag == null || sourceTag.isEmpty()) {
             // Some modern block codecs expose sign/block-entity data only through the original
@@ -90,7 +96,9 @@ public final class StructuredCommandArgumentAdapter {
                     .ifPresent(id -> translatedTag.putString("id", id));
         }
 
-        if (!new BlockEntityWHandler().handle(translatedTag)) return Optional.empty();
+        if (!new BlockEntityWHandler(componentValidator).handle(translatedTag)) {
+            return Optional.empty();
+        }
         if (temporaryId) translatedTag.remove("id");
 
         int tagStart = sourceArgument.indexOf('{');

@@ -30,6 +30,7 @@ import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.util.datafix.DataFixers;
 import net.minecraft.world.level.storage.LevelStorageSource;
 import net.minecraft.world.level.storage.WorldData;
+import org.spongepowered.asm.mixin.Unique;
 
 /**
  * @author FengMing
@@ -145,11 +146,7 @@ public class WtemScreen extends Screen {
                                             this.navigatingToChild = true;
                                             try {
                                                 Screen config = WtemConfigScreen.create(this);
-                                                //? if >=26.2 {
-                                                this.minecraft.setScreenAndShow(config);
-                                                //?} else {
-                                                /*this.minecraft.setScreenAndShow(config);
-                                                *///?}
+                                                wtem$setScreen(config);
                                             } catch (RuntimeException exception) {
                                                 this.navigatingToChild = false;
                                                 Wtem.LOGGER.warn(
@@ -171,11 +168,7 @@ public class WtemScreen extends Screen {
                                             try {
                                                 Screen selection =
                                                         WtemSelectionScreen.create(this, this.choices);
-                                                //? if >=26.2 {
-                                                this.minecraft.setScreenAndShow(selection);
-                                                //?} else {
-                                                /*this.minecraft.setScreenAndShow(selection);
-                                                *///?}
+                                                wtem$setScreen(selection);
                                             } catch (RuntimeException exception) {
                                                 this.navigatingToChild = false;
                                                 Wtem.LOGGER.warn(
@@ -344,5 +337,14 @@ public class WtemScreen extends Screen {
                 left,
                 top + 18,
                 -1);
+    }
+
+
+    @Unique
+    private void wtem$setScreen(Screen screen) {
+        //? if >=26.2 {
+        /*minecraft.setScreenAndShow(screen);
+         *///?} else
+        minecraft.setScreen(screen);
     }
 }

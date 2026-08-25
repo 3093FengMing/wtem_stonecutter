@@ -15,7 +15,7 @@ import java.util.Set;
  * storage in the same data pack and follow calls that read those values.  This index keeps that
  * useful subset from commands already accepted by Minecraft's parsers. Each call site keeps its
  * argument map intact so values from different callers are never combined into a fictitious
- * Cartesian product; an unresolved call never becomes a guessed value.
+ * Cartesian product.
  *
  * @author FengMing
  */

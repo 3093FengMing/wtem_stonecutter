@@ -12,7 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import me.fengming.wtem.common.config.WtemConfig;
 
-/** Minimal OpenAI-compatible Responses/Chat Completions client shared by translation and key naming.
+/**
+ * Minimal OpenAI-compatible Responses/Chat Completions client shared by translation and key naming.
  *
  * @author FengMing
  * */

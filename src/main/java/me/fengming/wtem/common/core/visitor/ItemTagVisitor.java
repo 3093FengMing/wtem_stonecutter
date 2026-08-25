@@ -1,5 +1,7 @@
 package me.fengming.wtem.common.core.visitor;
 
+import java.util.List;
+import java.util.function.Consumer;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.BlockEntityWHandler;
 import me.fengming.wtem.common.util.ChangeTracker;
@@ -8,9 +10,9 @@ import me.fengming.wtem.common.util.ResourceIds;
 import me.fengming.wtem.common.util.TranslationUtils;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
-
-import java.util.List;
+import net.minecraft.world.item.component.CustomData;
 
 /**
  * Extracts components from item stacks, including item stacks nested in data components.
@@ -19,6 +21,18 @@ import java.util.List;
  */
 public class ItemTagVisitor implements SimpleTagVisitor {
     private final ChangeTracker tracker = new ChangeTracker();
+    private final Consumer<CompoundTag> componentValidator;
+
+    public ItemTagVisitor() {
+        this(ItemTagVisitor::validateCustomData);
+    }
+
+    public ItemTagVisitor(Consumer<CompoundTag> componentValidator) {
+        this.componentValidator =
+                componentValidator == null
+                        ? ItemTagVisitor::validateCustomData
+                        : componentValidator;
+    }
 
     public boolean isChanged() {
         return this.tracker.isChanged();
@@ -96,6 +110,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
      * owning item to count.
      */
     private void visitPatch(CompoundTag components, String countType) {
+        this.componentValidator.accept(components);
         ChangeTracker item = new ChangeTracker();
         item.add(translateItemText(components));
         item.add(handleAttributeModifiers(components));
@@ -111,14 +126,17 @@ public class ItemTagVisitor implements SimpleTagVisitor {
 
     private static boolean translateItemText(CompoundTag components) {
         ChangeTracker tracker = new ChangeTracker();
+        String customName = componentKey(components, "minecraft:custom_name");
+        String itemName = componentKey(components, "minecraft:item_name");
         tracker.add(
                 TranslationUtils.translateNbtComponent(
-                        components, "minecraft:custom_name", "name"));
+                        components, customName, "name"));
         tracker.add(
                 TranslationUtils.translateNbtComponent(
-                        components, "minecraft:item_name", "item_name"));
+                        components, itemName, "item_name"));
 
-        ListTag lore = NbtUtils.getList(components, "minecraft:lore");
+        ListTag lore =
+                NbtUtils.getList(components, componentKey(components, "minecraft:lore"));
         for (int i = 0; i < lore.size(); i++) {
             tracker.add(TranslationUtils.translateNbtComponent(lore, i, "lore.line" + i));
         }
@@ -133,7 +151,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
      * leaving them alone, so the content is only reported.
      */
     private static void extractWritableBook(CompoundTag components) {
-        String componentName = "minecraft:writable_book_content";
+        String componentName = componentKey(components, "minecraft:writable_book_content");
         if (!components.contains(componentName)) return;
 
         ListTag pages =
@@ -184,7 +202,7 @@ public class ItemTagVisitor implements SimpleTagVisitor {
     }
 
     private static boolean handleBook(CompoundTag components) {
-        String componentName = "minecraft:written_book_content";
+        String componentName = componentKey(components, "minecraft:written_book_content");
         if (!components.contains(componentName)) return false;
 
         CompoundTag book = NbtUtils.getCompound(components, componentName);
@@ -210,12 +228,13 @@ public class ItemTagVisitor implements SimpleTagVisitor {
                 }
             }
 
-            if (!components.contains("minecraft:custom_name")) {
+            String customName = componentKey(components, "minecraft:custom_name");
+            if (!components.contains(customName)) {
                 String title = NbtUtils.getString(NbtUtils.getCompound(book, "title"), "raw");
                 tracker.add(
                         TranslationUtils.putTranslatedNbtComponent(
                                 components,
-                                "minecraft:custom_name",
+                                componentKey(components, "minecraft:custom_name"),
                                 title,
                                 true,
                                 "title"));
@@ -241,7 +260,9 @@ public class ItemTagVisitor implements SimpleTagVisitor {
     }
 
     private static boolean handleAttributeModifiers(CompoundTag components) {
-        ListTag modifiers = NbtUtils.getList(components, "minecraft:attribute_modifiers");
+        ListTag modifiers =
+                NbtUtils.getList(
+                        components, componentKey(components, "minecraft:attribute_modifiers"));
         ChangeTracker tracker = new ChangeTracker();
         for (int i = 0; i < modifiers.size(); i++) {
             CompoundTag modifier = NbtUtils.getCompound(modifiers, i);
@@ -255,37 +276,50 @@ public class ItemTagVisitor implements SimpleTagVisitor {
     }
 
     private void handleNestedItems(CompoundTag components) {
-        ListTag container = NbtUtils.getList(components, "minecraft:container", Tag.TAG_COMPOUND);
+        ListTag container =
+                NbtUtils.getList(
+                        components,
+                        componentKey(components, "minecraft:container"),
+                        Tag.TAG_COMPOUND);
         for (int i = 0; i < container.size(); i++) {
             handleItem(NbtUtils.getCompound(NbtUtils.getCompound(container, i), "item"));
         }
 
         for (String componentName :
                 List.of("minecraft:bundle_contents", "minecraft:charged_projectiles")) {
-            ListTag items = NbtUtils.getList(components, componentName, Tag.TAG_COMPOUND);
+            ListTag items =
+                    NbtUtils.getList(
+                            components, componentKey(components, componentName), Tag.TAG_COMPOUND);
             for (int i = 0; i < items.size(); i++) {
                 handleItem(NbtUtils.getCompound(items, i));
             }
         }
 
-        handleItem(NbtUtils.getCompound(components, "minecraft:use_remainder"));
+        handleItem(
+                NbtUtils.getCompound(
+                        components, componentKey(components, "minecraft:use_remainder")));
     }
 
-    private static boolean handleNestedData(CompoundTag components) {
-        EntityTagVisitor entityVisitor = new EntityTagVisitor();
+    private boolean handleNestedData(CompoundTag components) {
+        EntityTagVisitor entityVisitor = new EntityTagVisitor(this.componentValidator);
         for (String componentName :
                 List.of("minecraft:entity_data", "minecraft:bucket_entity_data")) {
-            CompoundTag entity = NbtUtils.getCompound(components, componentName);
+            CompoundTag entity =
+                    NbtUtils.getCompound(components, componentKey(components, componentName));
             if (!entity.isEmpty()) entity.accept(entityVisitor);
         }
 
-        CompoundTag blockEntity = NbtUtils.getCompound(components, "minecraft:block_entity_data");
+        CompoundTag blockEntity =
+                NbtUtils.getCompound(
+                        components, componentKey(components, "minecraft:block_entity_data"));
         boolean changed =
                 !blockEntity.isEmpty()
-                        && new BlockEntityWHandler()
+                        && new BlockEntityWHandler(this.componentValidator)
                                 .handle(blockEntity, TranslationContext.config().rebuildNestedKeys());
 
-        ListTag bees = NbtUtils.getList(components, "minecraft:bees", Tag.TAG_COMPOUND);
+        ListTag bees =
+                NbtUtils.getList(
+                        components, componentKey(components, "minecraft:bees"), Tag.TAG_COMPOUND);
         for (int i = 0; i < bees.size(); i++) {
             // Occupant#entity_data stores the entity compound directly, so there is no nested
             // 'entity' wrapper here, unlike SpawnData.
@@ -293,5 +327,46 @@ public class ItemTagVisitor implements SimpleTagVisitor {
             if (!entityData.isEmpty()) entityData.accept(entityVisitor);
         }
         return changed || entityVisitor.isChanged();
+    }
+
+    /**
+     * Command SNBT commonly omits {@code minecraft:} for built-in item components.  The generic
+     * summon NBT parser preserves that spelling when another component is malformed, so visitors
+     * must recognize it before the item codec gets a chance to reject the whole stack.
+     */
+    private static String componentKey(CompoundTag components, String canonical) {
+        if (components.contains(canonical)) return canonical;
+        String shortName = canonical;
+        int separator = canonical.indexOf(':');
+        if (separator >= 0 && separator + 1 < canonical.length()) {
+            shortName = canonical.substring(separator + 1);
+        }
+        return components.contains(shortName) ? shortName : canonical;
+    }
+
+    private static void validateCustomData(CompoundTag components) {
+        String customData = componentKey(components, "minecraft:custom_data");
+        Tag value = components.get(customData);
+        if (value == null) return;
+
+        try (var ignored = TranslationContext.push(customData)) {
+            try {
+                // Vanilla also accepts a string here when the string itself contains compound
+                // SNBT. Use the component codec so that form is not mistaken for an invalid value.
+                CustomData.CODEC
+                        .parse(NbtOps.INSTANCE, value)
+                        .error()
+                        .ifPresent(
+                                error ->
+                                        TranslationContext.recordWarning(
+                                                "item_component",
+                                                "Item component custom_data could not be decoded by"
+                                                        + " Minecraft's codec; WTEM preserved the"
+                                                        + " original value and continued extraction: "
+                                                        + error));
+            } catch (RuntimeException exception) {
+                TranslationContext.recordFailure("item_component", exception);
+            }
+        }
     }
 }

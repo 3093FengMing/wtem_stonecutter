@@ -263,6 +263,13 @@ public final class TranslationContext {
         diagnostics.recordWarning(scope, warningLocation(), message);
     }
 
+    /** Records a non-fatal exception without losing its extraction metadata or stack trace. */
+    public static void recordFailure(String scope, Throwable cause) {
+        ExtractionDiagnostics diagnostics = state().diagnostics;
+        if (diagnostics == null) return;
+        diagnostics.record(scope, warningLocation(), cause);
+    }
+
     private static String warningLocation() {
         State state = state();
         StringBuilder location = new StringBuilder();

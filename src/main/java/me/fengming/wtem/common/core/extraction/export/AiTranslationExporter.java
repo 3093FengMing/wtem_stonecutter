@@ -130,9 +130,8 @@ public final class AiTranslationExporter {
         JsonObject values = new JsonObject();
         entries.forEach(entry -> values.addProperty(entry.getKey(), entry.getValue()));
         String prompt =
-                settings
-                        .translationPrompt()
-                        .replace("{target_language}", settings.targetLanguage());
+                settings.translationPrompt()
+                    .replace("{target_language}", settings.targetLanguage());
         return parseObject(client.complete(prompt, values.toString(), 0.2));
     }
 

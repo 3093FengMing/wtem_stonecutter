@@ -27,7 +27,11 @@ import net.minecraft.nbt.TagParser;
 final class MacroCommandMaterializer {
     private static final ThreadLocal<MacroCallGraph> MACRO_CALL_GRAPH = new ThreadLocal<>();
     private static final ThreadLocal<String> CURRENT_FUNCTION_ID = new ThreadLocal<>();
-    private static final Set<String> TEXT_COMPONENTS = Set.of("text", "translate", "score", "selector", "nbt", "keybind", "object");
+    private static final Set<String> TEXT_COMPONENTS = Set.of(
+        "text", "translate", "score",
+        "selector", "nbt", "keybind",
+        "object"
+    );
 
     private MacroCommandMaterializer() {}
 

@@ -15,6 +15,7 @@ import me.fengming.wtem.common.config.WtemConfig;
 import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
 import me.fengming.wtem.common.core.extraction.manifest.ExtractionRecord;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
+import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -313,6 +314,28 @@ class TranslationContextTest {
                                         "minecraft:chest"),
                                 false)),
                 TranslationContext.records());
+    }
+
+    @Test
+    void recordsFailuresWithTheCurrentExtractionMetadata() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        TranslationContext.setDiagnostics(diagnostics);
+        IllegalStateException cause = new IllegalStateException("codec failed");
+
+        try (var source = TranslationContext.pushSource("datapacks");
+                var location = TranslationContext.pushLocation("test:function/example.mcfunction");
+                var subject = TranslationContext.pushSubject("minecraft:yellow_dye")) {
+            TranslationContext.setKey("item.yellow_dye.1.minecraft:custom_data");
+            TranslationContext.recordFailure("item_component", cause);
+        }
+
+        ExtractionDiagnostics.Failure failure = diagnostics.failures().getFirst();
+        assertEquals("item_component", failure.scope());
+        assertEquals(cause, failure.cause());
+        assertEquals(
+                "datapacks > test:function/example.mcfunction > minecraft:yellow_dye > key"
+                        + " item.yellow_dye.1.minecraft:custom_data",
+                failure.resource());
     }
 
     @Test

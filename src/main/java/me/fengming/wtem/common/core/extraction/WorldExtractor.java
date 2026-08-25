@@ -489,14 +489,10 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     private record PackResource(Identifier id, IoSupplier<InputStream> supplier) {}
 
     public void extractStructures() {
-        String structureDirectory =
-                //? if >=26.1 {
-                "structure";
-                //?} else
-                //"structures";
         new GeneratedStructureExtractor(
                         this.levelStorage.getLevelPath(LevelResource.GENERATED_DIR),
-                        structureDirectory,
+                        //~ if >=26.1 'structure' -> 'structures'
+                        "structure",
                         this.session)
                 .extract();
     }

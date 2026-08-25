@@ -3,6 +3,7 @@ package me.fengming.wtem.common.core.handler;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.function.Consumer;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
 import me.fengming.wtem.common.core.visitor.EntityTagVisitor;
@@ -20,9 +21,20 @@ import net.minecraft.nbt.TagVisitor;
 /**
  * Extracts translatable data from block entities and recursively visits their stored items and
  * entities.
+ *
  * @author FengMing
  */
 public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
+    private final Consumer<CompoundTag> itemComponentValidator;
+
+    public BlockEntityWHandler() {
+        this(null);
+    }
+
+    public BlockEntityWHandler(Consumer<CompoundTag> itemComponentValidator) {
+        this.itemComponentValidator = itemComponentValidator;
+    }
+
     private static final Set<String> CONTAINER_TYPES =
             Set.of("barrel", "blast_furnace", "brewing_stand",
                 "campfire", "chest", "chiseled_bookshelf",
@@ -96,7 +108,7 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
     }
 
     private TagVisitor getVisitor(String id, ChangeTracker tracker) {
-        EntityTagVisitor entityVisitor = new EntityTagVisitor();
+        EntityTagVisitor entityVisitor = new EntityTagVisitor(this.itemComponentValidator);
         if (CONTAINER_TYPES.contains(id)) return itemListVisitor("Items", tracker);
         return switch (id) {
             case "jukebox" -> itemVisitor("RecordItem", tracker);
@@ -157,17 +169,17 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
         };
     }
 
-    private static SimpleTagVisitor itemListVisitor(String field, ChangeTracker tracker) {
+    private SimpleTagVisitor itemListVisitor(String field, ChangeTracker tracker) {
         return tag -> {
-            ItemTagVisitor visitor = new ItemTagVisitor();
+            ItemTagVisitor visitor = new ItemTagVisitor(this.itemComponentValidator);
             NbtUtils.getList(tag, field, Tag.TAG_COMPOUND).accept(visitor);
             tracker.add(visitor.isChanged());
         };
     }
 
-    private static SimpleTagVisitor itemVisitor(String field, ChangeTracker tracker) {
+    private SimpleTagVisitor itemVisitor(String field, ChangeTracker tracker) {
         return tag -> {
-            ItemTagVisitor visitor = new ItemTagVisitor();
+            ItemTagVisitor visitor = new ItemTagVisitor(this.itemComponentValidator);
             NbtUtils.getCompound(tag, field).accept(visitor);
             tracker.add(visitor.isChanged());
         };

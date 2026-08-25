@@ -2,7 +2,7 @@ plugins {
     id("dev.kikugie.stonecutter")
 }
 
-stonecutter active "26.2.x"
+stonecutter active "26.1.x"
 
 // Each version node publishes on its own, so without ordering they race to create the GitHub
 // release for the tag. Ordering the endpoint tasks (not `publishMods`, which only delegates to

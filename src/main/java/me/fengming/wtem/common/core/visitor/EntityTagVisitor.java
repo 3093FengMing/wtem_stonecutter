@@ -2,6 +2,7 @@ package me.fengming.wtem.common.core.visitor;
 
 import java.util.List;
 import java.util.OptionalDouble;
+import java.util.function.Consumer;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.util.ChangeTracker;
 import me.fengming.wtem.common.util.NbtUtils;
@@ -18,6 +19,15 @@ import net.minecraft.nbt.Tag;
  */
 public class EntityTagVisitor implements SimpleTagVisitor {
     private final ChangeTracker tracker = new ChangeTracker();
+    private final Consumer<CompoundTag> itemComponentValidator;
+
+    public EntityTagVisitor() {
+        this(null);
+    }
+
+    public EntityTagVisitor(Consumer<CompoundTag> itemComponentValidator) {
+        this.itemComponentValidator = itemComponentValidator;
+    }
 
     public boolean isChanged() {
         return this.tracker.isChanged();
@@ -107,8 +117,8 @@ public class EntityTagVisitor implements SimpleTagVisitor {
         }
     }
 
-    private static boolean visitItems(CompoundTag tag) {
-        ItemTagVisitor itemVisitor = new ItemTagVisitor();
+    private boolean visitItems(CompoundTag tag) {
+        ItemTagVisitor itemVisitor = itemVisitor();
 
         // for 1.21.5+
         CompoundTag equipment = NbtUtils.getCompound(tag, "equipment");
@@ -134,8 +144,8 @@ public class EntityTagVisitor implements SimpleTagVisitor {
         return itemVisitor.isChanged();
     }
 
-    private static boolean visitTrades(CompoundTag tag) {
-        ItemTagVisitor itemVisitor = new ItemTagVisitor();
+    private boolean visitTrades(CompoundTag tag) {
+        ItemTagVisitor itemVisitor = itemVisitor();
         ListTag recipes =
                 NbtUtils.getList(NbtUtils.getCompound(tag, "Offers"), "Recipes", Tag.TAG_COMPOUND);
         for (int i = 0; i < recipes.size(); i++) {
@@ -145,5 +155,11 @@ public class EntityTagVisitor implements SimpleTagVisitor {
             }
         }
         return itemVisitor.isChanged();
+    }
+
+    private ItemTagVisitor itemVisitor() {
+        return this.itemComponentValidator == null
+                ? new ItemTagVisitor()
+                : new ItemTagVisitor(this.itemComponentValidator);
     }
 }

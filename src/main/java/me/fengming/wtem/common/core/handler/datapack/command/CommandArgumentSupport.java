@@ -11,7 +11,11 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 
-/** Small, schema-neutral helpers for reading values from Brigadier's parsed command tree. */
+/**
+ *  Small, schema-neutral helpers for reading values from Brigadier's parsed command tree.
+ *
+ * @author FengMing
+ */
 final class CommandArgumentSupport {
     private CommandArgumentSupport() {}
 

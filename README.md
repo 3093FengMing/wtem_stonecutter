@@ -95,6 +95,7 @@ The warnings below identify cases that need review or could not be rewritten saf
 | `function_command`           | A parsed command could not be processed.                                                                                            |
 | `function_reparse`           | A rewritten command did not pass the validation reparse.                                                                            |
 | `function_component_rewrite` | A text component or structured argument in a function could not be rewritten safely.                                                |
+| `function_item_component`    | An item component value in a function failed Minecraft's codec; known text is still extracted while the original value is preserved. |
 | `function_selector_name`     | A selector name that looks like a text-bearing argument could not be resolved.                                                      |
 | `function_storage_string`    | A literal string was written directly into command storage by `data modify storage ... set value`.                                  |
 | `pattern_json_string`        | A custom JSON pattern selected a plain string. It is cataloged but left unchanged and needs manual review.                          |
@@ -103,6 +104,7 @@ The warnings below identify cases that need review or could not be rewritten saf
 | `function_macro_restore`     | A materialized macro command could not be restored and validated for its callers.                                                   |
 | `writable_book`              | A writable-book `writable_book_content.pages[*].raw` string was cataloged but cannot be replaced by a component (`replaced=false`). |
 | `written_book_string`        | A written-book plain string such as `author` remains unchanged.                                                                     |
+| `item_component`             | An item component value failed Minecraft's codec and was preserved while WTEM continued extracting known text fields.                |
 | `generated_structure`        | A world-generated structure could not be read or rewritten.                                                                         |
 | `language`                   | The primary language catalog could not be written.                                                                                  |
 | `manifest`                   | The CSV extraction report could not be written.                                                                                     |
