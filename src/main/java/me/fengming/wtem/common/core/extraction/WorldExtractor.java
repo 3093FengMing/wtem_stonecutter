@@ -492,7 +492,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         new GeneratedStructureExtractor(
                         this.levelStorage.getLevelPath(LevelResource.GENERATED_DIR),
                         //~ if >=26.1 'structure' -> 'structures'
-                        "structure",
+                        "structures",
                         this.session)
                 .extract();
     }

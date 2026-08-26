@@ -229,7 +229,7 @@ class FunctionHandlerTest {
     // The supplied command uses the 26.2 writable-book component codec. The block-entity-level
     // regression test covers the same NBT path on every supported version.
     //? if >=26.2 {
-    /*@Test
+    @Test
     void catalogsLecternWritableBookPagesFromTheSuppliedSetblockCommand() {
         String command =
                 """
@@ -249,7 +249,7 @@ class FunctionHandlerTest {
                         .startsWith("[ 붕어빵 결합 ]"));
         assertTrue(TranslationContext.records().stream().noneMatch(record -> record.replaced()));
     }
-    *///?}
+    //?}
 
     @Test
     void translatesMacroLineWithoutInterpolations() {
@@ -371,7 +371,7 @@ class FunctionHandlerTest {
     }
 
     //? if >=26.2 {
-    /*@Test
+    @Test
     void doesNotEmbedAComponentValueIntoAQuotedScalarMacroField() {
         String command =
                 "$dialog show @s {\"type\":\"minecraft:multi_action\","
@@ -404,7 +404,7 @@ class FunctionHandlerTest {
                                                 && failure.cause() == null),
                 diagnostics.failures()::toString);
     }
-    *///?}
+    //?}
 
     //? if >=1.21.8 {
     @Test
@@ -435,7 +435,7 @@ class FunctionHandlerTest {
     // caller binding is materialized before command extraction and that the original macros are
     // restored after nested dialog components and action commands have been translated.
     //? if >=26.2 {
-    /*@Test
+    @Test
     void materializesACompleteDialogMacroFromItsKnownCallerBinding() {
         String command =
                 "$dialog show @s {\"type\":\"minecraft:multi_action\","
@@ -481,7 +481,7 @@ class FunctionHandlerTest {
                         .noneMatch(value -> value.contains("known.event") || value.equals("5") || value.equals("yellow")),
                 TranslationContext.snapshot()::toString);
     }
-    *///?}
+    //?}
 
     @Test
     void translatesMacroLineArgumentBesideAnInterpolatedArgument() {

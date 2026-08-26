@@ -146,7 +146,7 @@ public class WtemScreen extends Screen {
                                             this.navigatingToChild = true;
                                             try {
                                                 Screen config = WtemConfigScreen.create(this);
-                                                wtem$setScreen(config);
+                                                wtem$setScreenAndShow(config);
                                             } catch (RuntimeException exception) {
                                                 this.navigatingToChild = false;
                                                 Wtem.LOGGER.warn(
@@ -168,7 +168,7 @@ public class WtemScreen extends Screen {
                                             try {
                                                 Screen selection =
                                                         WtemSelectionScreen.create(this, this.choices);
-                                                wtem$setScreen(selection);
+                                                wtem$setScreenAndShow(selection);
                                             } catch (RuntimeException exception) {
                                                 this.navigatingToChild = false;
                                                 Wtem.LOGGER.warn(
@@ -341,10 +341,10 @@ public class WtemScreen extends Screen {
 
 
     @Unique
-    private void wtem$setScreen(Screen screen) {
+    private void wtem$setScreenAndShow(Screen screen) {
         //? if >=26.2 {
-        /*minecraft.setScreenAndShow(screen);
-         *///?} else
-        minecraft.setScreen(screen);
+        minecraft.setScreenAndShow(screen);
+         //?} else
+        //minecraft.setScreenAndShow(screen);
     }
 }

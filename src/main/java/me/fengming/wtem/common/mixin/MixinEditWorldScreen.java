@@ -63,8 +63,8 @@ public abstract class MixinEditWorldScreen extends Screen {
     @Unique
     private void wtem$setScreen(Screen screen) {
         //? if >=26.2 {
-        /*minecraft.setScreenAndShow(screen);
-        *///?} else
-        minecraft.setScreen(screen);
+        minecraft.setScreenAndShow(screen);
+        //?} else
+        //minecraft.setScreen(screen);
     }
 }
