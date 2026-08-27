@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import me.fengming.wtem.common.config.WtemConfig;
+import me.fengming.wtem.common.core.extraction.manifest.ExtractionOrigin;
 import me.fengming.wtem.common.core.extraction.service.ExtractionDiagnostics;
 import me.fengming.wtem.common.core.extraction.TranslationContext;
 import me.fengming.wtem.common.core.handler.datapack.command.FunctionHandler;
@@ -785,6 +786,117 @@ class FunctionHandlerTest {
         assertTrue(
                 TranslationContext.snapshot().containsValue("伤害增加\n10%%\n完成"),
                 TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void doesNotRecurseIntoGeneratedTextComponentsFromSummonNbt() {
+        String command =
+                "summon minecraft:marker ~ ~ ~ "
+                        + "{payload:{text:\"Root\",extra:[{text:\"Child\"},{text:\"Grandchild\"}]}}";
+
+        String result = FunctionHandler.processFunction(command, "test:deep_text.mcfunction");
+
+        assertNotEquals(command, result, result);
+        assertTrue(result.contains("translate"), result);
+        assertTrue(
+                TranslationContext.snapshot().values().stream()
+                        .anyMatch(value -> value.contains("Root")),
+                TranslationContext.snapshot()::toString);
+        assertTrue(
+                TranslationContext.snapshot().values().stream()
+                        .anyMatch(value -> value.contains("Child")),
+                TranslationContext.snapshot()::toString);
+        assertTrue(
+                TranslationContext.snapshot().values().stream()
+                        .anyMatch(value -> value.contains("Grandchild")),
+                TranslationContext.snapshot()::toString);
+    }
+
+    //? if >=26.1 {
+    @Test
+    void processesLargeWrittenBookSummonWithoutRecursiveRescan() {
+        StringBuilder pages = new StringBuilder();
+        for (int page = 0; page < 20; page++) {
+            if (!pages.isEmpty()) pages.append(',');
+            pages.append("{raw:{text:\"\",extra:[")
+                    .append("{text:\"Page ").append(page).append(" title\",bold:1b},")
+                    .append("\"\\nA deliberately long page body ").append(page).append(". \",")
+                    .append("{text:\"Page ").append(page).append(" footer\",color:\"gold\"}")
+                    .append("]}}");
+        }
+        String command =
+                "execute if score !timer genericTimer matches 971 run summon minecraft:item ~ ~ ~ "
+                        + "{Item:{id:\"minecraft:written_book\",components:{"
+                        + "\"minecraft:item_name\":{text:\"Cooking\",extra:[{text:\" Book\"}]},"
+                        + "\"minecraft:written_book_content\":{title:\"\",author:\"Chef\","
+                        + "generation:2,pages:["
+                        + pages
+                        + "]}},count:1}}";
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String result =
+                FunctionHandler.processFunction(
+                        command, "map_timeless:dialogue_scenes/book_regression.mcfunction");
+
+        assertNotEquals(command, result, result);
+        assertTrue(result.contains("translate"), result);
+        assertTrue(TranslationContext.snapshot().containsValue("Cooking Book"),
+                TranslationContext.snapshot()::toString);
+        assertTrue(
+                TranslationContext.snapshot().values().stream()
+                        .anyMatch(value -> value.contains("Page 19 title")),
+                TranslationContext.snapshot()::toString);
+        assertTrue(
+                diagnostics.failures().stream()
+                        .noneMatch(failure -> "function_command".equals(failure.scope())),
+                diagnostics.failures()::toString);
+    }
+    //?}
+
+    @Test
+    void reportsTextNbtDepthLimitOnceWithFullCommandMetadata() {
+        var config = WtemConfig.DEFAULT.toJson(List.of("function"));
+        config.addProperty("nbt_max_depth", 2);
+        WtemConfig.initialize(WtemConfig.fromJson(config));
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+        String command =
+                "summon minecraft:marker ~ ~ ~ "
+                        + "{first:{nested:{text:\"Too deep\"}},second:{nested:{text:\"Also deep\"}}}";
+
+        String result;
+        try (var ignored =
+                TranslationContext.pushOrigin(
+                        new ExtractionOrigin(
+                                "datapacks", "file/MapTimelessDataPack", "minecraft:item"))) {
+            result =
+                    FunctionHandler.processFunction(
+                            "# metadata regression\n" + command,
+                            "map_timeless:dialogue_scenes/depth_limit.mcfunction");
+        }
+
+        assertEquals("# metadata regression\n" + command, result);
+        List<ExtractionDiagnostics.Failure> warnings =
+                diagnostics.failures().stream()
+                        .filter(failure -> "function_component_rewrite".equals(failure.scope()))
+                        .toList();
+        assertEquals(1, warnings.size(), warnings::toString);
+        ExtractionDiagnostics.Failure warning = warnings.getFirst();
+        assertEquals(null, warning.cause());
+        assertTrue(warning.resource().contains("datapacks"), warning.resource());
+        assertTrue(warning.resource().contains("file/MapTimelessDataPack"), warning.resource());
+        assertTrue(warning.resource().contains("minecraft:item"), warning.resource());
+        assertTrue(
+                warning.resource().contains(
+                        "map_timeless:function/dialogue_scenes/depth_limit.mcfunction"),
+                warning.resource());
+        assertTrue(warning.resource().contains("line 2"), warning.resource());
+        assertTrue(warning.resource().contains("key datapack.test.function"), warning.resource());
+        assertTrue(warning.resource().contains("command summon minecraft:marker"), warning.resource());
+        assertTrue(warning.resource().contains("detail first.nested"), warning.resource());
     }
 
     @Test

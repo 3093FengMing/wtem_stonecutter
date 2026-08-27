@@ -857,10 +857,16 @@ final class CommandParseSupport {
      * compounds and lists.
      */
     private static boolean translateTextNbtFields(CompoundTag root) {
-        return translateTextNbtFields(root, "");
+        return translateTextNbtFields(root, "", 0, new TextNbtTraversal());
     }
 
-    private static boolean translateTextNbtFields(CompoundTag compound, String path) {
+    private static boolean translateTextNbtFields(
+            CompoundTag compound, String path, int depth, TextNbtTraversal traversal) {
+        if (depth >= TranslationContext.config().nbtMaxDepth()) {
+            traversal.recordDepthLimit(path);
+            return false;
+        }
+
         boolean changed = false;
         for (String name : new ArrayList<>(NbtUtils.getKeys(compound))) {
             Tag child = compound.get(name);
@@ -868,31 +874,61 @@ final class CommandParseSupport {
 
             String keyPath = path.isBlank() ? name : path + "." + name;
             if ("text".equals(name)) {
-                changed |= TranslationUtils.translateNbtComponent(compound, name, keyPath);
+                boolean textChanged =
+                        TranslationUtils.translateNbtComponent(compound, name, keyPath);
+                changed |= textChanged;
                 child = compound.get(name);
                 if (child == null) continue;
+                // TranslationUtils already traverses a component's extra/with/hover children while
+                // creating the replacement. Re-entering that newly generated component here can
+                // repeatedly translate its own text arguments and overflow the Java stack on long
+                // books or large summon payloads.
+                if (textChanged) continue;
             }
-            changed |= translateTextNbtChildren(child, keyPath);
+            changed |= translateTextNbtChildren(child, keyPath, depth + 1, traversal);
         }
         return changed;
     }
 
-    private static boolean translateTextNbtChildren(Tag tag, String path) {
+    private static boolean translateTextNbtChildren(
+            Tag tag, String path, int depth, TextNbtTraversal traversal) {
         if (tag instanceof CompoundTag compound) {
-            return translateTextNbtFields(compound, path);
+            return translateTextNbtFields(compound, path, depth, traversal);
         }
         if (!(tag instanceof ListTag list)) return false;
+        if (depth >= TranslationContext.config().nbtMaxDepth()) {
+            traversal.recordDepthLimit(path);
+            return false;
+        }
 
         boolean changed = false;
         for (int i = 0; i < list.size(); i++) {
             Tag child = list.get(i);
             if (child instanceof CompoundTag compound) {
-                changed |= translateTextNbtFields(compound, path + "." + i);
+                changed |=
+                        translateTextNbtFields(
+                                compound, path + "." + i, depth + 1, traversal);
             } else if (child instanceof ListTag nested) {
-                changed |= translateTextNbtChildren(nested, path + "." + i);
+                changed |=
+                        translateTextNbtChildren(
+                                nested, path + "." + i, depth + 1, traversal);
             }
         }
         return changed;
+    }
+
+    /** Emits at most one depth warning for a command even when several branches are truncated. */
+    private static final class TextNbtTraversal {
+        private boolean depthLimitRecorded;
+
+        private void recordDepthLimit(String path) {
+            if (this.depthLimitRecorded) return;
+            this.depthLimitRecorded = true;
+            recordCommandWarning(
+                    "function_component_rewrite",
+                    path,
+                    "Text-field traversal reached the configured NBT depth limit; deeper values were preserved");
+        }
     }
 
     private static boolean isTextOnlyNbtArgument(

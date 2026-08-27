@@ -104,8 +104,18 @@ public class FunctionHandler extends NonExtraResourceHandler {
         if (!key.isBlank()) {
             appendLocationPart(location, "key " + key);
         }
-        String commandDetail = compactDetail(detail);
-        if (!commandDetail.isBlank()) appendLocationPart(location, "command " + commandDetail);
+        String commandSource = command == null ? "" : compactDetail(command.source());
+        if (!commandSource.isBlank()) appendLocationPart(location, "command " + commandSource);
+
+        // Most callers pass the command itself as the detail. Some diagnostics instead pass an
+        // NBT path, selector, or rewritten candidate. Keep that extra provenance without losing
+        // the physical source command held by the active command scope.
+        String diagnosticDetail = compactDetail(detail);
+        if (command == null && !diagnosticDetail.isBlank()) {
+            appendLocationPart(location, "command " + diagnosticDetail);
+        } else if (!diagnosticDetail.isBlank() && !diagnosticDetail.equals(commandSource)) {
+            appendLocationPart(location, "detail " + diagnosticDetail);
+        }
         return location.isEmpty() ? "unknown" : location.toString();
     }
 
@@ -193,10 +203,20 @@ public class FunctionHandler extends NonExtraResourceHandler {
                                     source);
                     var transaction = TranslationContext.beginTransaction()) {
                 int recordsBefore = TranslationContext.recordCount();
-                CommandExtraction extraction =
-                        line.macro()
-                                ? MacroCommandMaterializer.extract(parser, line)
-                                : CommandParseSupport.extractRegularCommand(parser, line);
+                CommandExtraction extraction;
+                try {
+                    extraction =
+                            line.macro()
+                                    ? MacroCommandMaterializer.extract(parser, line)
+                                    : CommandParseSupport.extractRegularCommand(parser, line);
+                } catch (StackOverflowError error) {
+                    // A malformed or unusually deep command must not abort extraction of the
+                    // entire world. The command location scope is still active, so WTEM can
+                    // attach the function file, physical line, subject and key metadata.
+                    CommandParseSupport.recordCommandFailure(
+                            "function_command", source, error);
+                    continue;
+                }
                 if (!extraction.changed()) {
                     if (TranslationContext.hasOnlyCatalogEntriesSince(recordsBefore)) {
                         transaction.commit();
