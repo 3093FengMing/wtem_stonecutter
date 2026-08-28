@@ -102,6 +102,7 @@ The warnings below identify cases that need review or could not be rewritten saf
 | `pattern_command_string`     | A custom command pattern selected a plain string. It is cataloged but left unchanged and needs manual review.                       |
 | `function_macro_binding`     | A macro caller/storage binding was missing, ambiguous, or not statically resolvable.                                                |
 | `function_macro_restore`     | A materialized macro command could not be restored and validated for its callers.                                                   |
+| `function_macro_string`      | Inline `function <id> {arguments}` macro arguments contain a string value; nested commands and possible text are kept unchanged. |
 | `writable_book`              | A writable-book `writable_book_content.pages[*].raw` string was cataloged but cannot be replaced by a component (`replaced=false`). |
 | `written_book_string`        | A written-book plain string such as `author` remains unchanged.                                                                     |
 | `item_component`             | An item component value failed Minecraft's codec and was preserved while WTEM continued extracting known text fields.                |

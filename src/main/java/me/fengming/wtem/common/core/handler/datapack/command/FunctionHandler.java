@@ -202,6 +202,13 @@ public class FunctionHandler extends NonExtraResourceHandler {
                                     logicalLine.lastLineIndex(),
                                     source);
                     var transaction = TranslationContext.beginTransaction()) {
+                if (CommandParseSupport.recordFunctionMacroStringWarning(parser, line)) {
+                    // Inline function arguments are runtime data. If they contain strings, the
+                    // callee's schema is unavailable here, so translating any part of this call
+                    // could corrupt nested commands or user-facing text. Keep the whole command
+                    // unchanged and leave the warning for manual review.
+                    continue;
+                }
                 int recordsBefore = TranslationContext.recordCount();
                 CommandExtraction extraction;
                 try {

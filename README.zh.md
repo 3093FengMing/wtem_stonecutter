@@ -103,6 +103,7 @@ WTEM 不会修改原始世界数据包。生成的新数据包只保存实际发
 | `pattern_command_string`     | 自定义命令 pattern 明确选中了裸字符串；参数会进入目录但保持原样，需要人工复核。                |
 | `function_macro_binding`     | 宏调用者或 storage 参数缺失、含义不明确，或无法静态解析。                                      |
 | `function_macro_restore`     | 无法为调用者恢复并校验实例化后的宏命令。                                                       |
+| `function_macro_string`      | 内联 `function <id> {arguments}` 宏参数含有字符串；嵌套命令和可能的文本保持不变，需人工检查。     |
 | `writable_book`              | 书与笔的 `writable_book_content.pages[*].raw` 被编目，但它不能替换为组件（`replaced=false`）。 |
 | `written_book_string`        | 成书中的 `author` 等普通字符串保持原样。                                                       |
 | `item_component`             | 物品组件值未通过 Minecraft codec 时会保持原样，WTEM 同时继续提取其中已知的文本字段。           |

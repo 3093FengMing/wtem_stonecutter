@@ -900,21 +900,114 @@ class FunctionHandlerTest {
     }
 
     @Test
-    void extractsOnlyTheTextFieldFromFunctionArgumentNbt() {
+    void warnsAndPreservesInlineFunctionArgumentsWithStrings() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
         String command =
                 "function takoyaki:text_log/summon "
                         + "{text:\"おたま\",add:\"-\",coler:\"red\",money:\"125\"}";
 
         String result = FunctionHandler.processFunction(List.of(command));
 
-        assertNotEquals(command, result, result);
-        assertTrue(result.startsWith("function takoyaki:text_log/summon"), result);
+        assertEquals(command, result);
+        assertTrue(
+                diagnostics.failures().stream()
+                        .anyMatch(failure -> "function_macro_string".equals(failure.scope())),
+                diagnostics.failures()::toString);
+        assertTrue(TranslationContext.snapshot().isEmpty(), TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void keepsMacroWithTextArgumentsAsStringsWhenWalkingSummonNbt() {
+        String command =
+                "$summon minecraft:pig 507 105 -887 "
+                        + "{CustomName:{bold:1b,color:\"#7DFFF6\",text:\"Science\","
+                        + "extra:[{bold:0b,color:\"#FF84A9\",text:\" Pig\"},"
+                        + "{bold:1b,color:\"#F5AD31\",text:\" #$(pig_count)\"}]}}";
+
+        String result = FunctionHandler.processFunction(command);
+
+        assertFalse(result.contains("text:{translate:"), result);
+        assertTrue(result.contains("with:[{text:\"$(pig_count)\"}]"), result);
+        assertTrue(
+                TranslationContext.snapshot().values().stream()
+                        .anyMatch(value -> value.contains("#%s")),
+                TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void translatesOpenEntityComponentAtItsParentField() {
+        String command =
+                "data merge entity @s {CustomName:{bold:1b,color:\"#72C487\","
+                        + "text:\"Healthy \",extra:[{bold:1b,color:\"#644C31\",text:\" Cow\"}]}}";
+
+        String result = FunctionHandler.processFunction(command);
+
+        assertFalse(result.contains("text:{translate:"), result);
+        assertTrue(result.contains("CustomName:{"), result);
         assertTrue(result.contains("translate"), result);
-        assertTrue(result.contains("add:\"-\""), result);
-        assertTrue(result.contains("coler:\"red\""), result);
-        assertTrue(result.contains("money:\"125\""), result);
-        assertTrue(TranslationContext.snapshot().containsValue("おたま"), TranslationContext.snapshot()::toString);
-        assertEquals(1, TranslationContext.snapshot().size(), TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void warnsWhenInlineFunctionMacroArgumentsContainStrings() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String command = "function test:target {name:\"Hello\",count:1}";
+        assertEquals(command, FunctionHandler.processFunction(command));
+
+        List<ExtractionDiagnostics.Failure> warnings =
+                diagnostics.failures().stream()
+                        .filter(failure -> "function_macro_string".equals(failure.scope()))
+                        .toList();
+        assertEquals(1, warnings.size(), diagnostics.failures()::toString);
+        assertTrue(warnings.getFirst().displayMessage().contains("string value"), warnings::toString);
+    }
+
+    @Test
+    void doesNotWarnForNonStringInlineFunctionMacroArguments() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String command = "function test:target {count:1,enabled:true}";
+        assertEquals(command, FunctionHandler.processFunction(command));
+        assertTrue(
+                diagnostics.failures().stream()
+                        .noneMatch(failure -> "function_macro_string".equals(failure.scope())),
+                diagnostics.failures()::toString);
+    }
+
+    @Test
+    void doesNotWarnForFunctionStorageMacroInvocationWithoutInlineArguments() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String command = "function test:target with storage test:runtime";
+        assertEquals(command, FunctionHandler.processFunction(command));
+        assertTrue(
+                diagnostics.failures().stream()
+                        .noneMatch(failure -> "function_macro_string".equals(failure.scope())),
+                diagnostics.failures()::toString);
+    }
+
+    @Test
+    void warnsForInlineFunctionMacroArgumentsNestedAfterExecuteRun() {
+        ExtractionDiagnostics diagnostics = new ExtractionDiagnostics();
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(), diagnostics);
+
+        String command = "execute as @s run function test:target {name:\"Hello\"}";
+        assertEquals(command, FunctionHandler.processFunction(command));
+        assertEquals(
+                1,
+                diagnostics.failures().stream()
+                        .filter(failure -> "function_macro_string".equals(failure.scope()))
+                        .count(),
+                diagnostics.failures()::toString);
     }
 
     //? if >=1.21.9 {

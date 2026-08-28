@@ -241,6 +241,75 @@ final class CommandParseSupport {
                 "A bare string written directly to data storage may be user-facing text and needs manual review");
     }
 
+    /** Warns once when an inline function argument compound contains a string value. */
+    static boolean recordFunctionMacroStringWarning(
+            ParserContext parser, MacroArgumentRestorer.CommandLine line) {
+        String source = line.source();
+        if (source == null || !source.contains("function") || !source.contains("{")) return false;
+
+        ParsedCommand parsed = parseAcceptedCommand(parser, line.text());
+        if (parsed == null) return false;
+        CommandContextBuilder<CommandSourceStack> context = parsed.results().getContext();
+        if (!CommandArgumentSupport.containsCommandNode(context, "function")) return false;
+
+        boolean functionNodeSeen = false;
+        while (context != null) {
+            functionNodeSeen |=
+                    context.getNodes().stream()
+                            .anyMatch(node -> "function".equals(node.getNode().getName()));
+            if (!functionNodeSeen) {
+                context = context.getChild();
+                continue;
+            }
+            for (ParsedArgument<CommandSourceStack, ?> argument :
+                    context.getArguments().values()) {
+                if (argument.getResult() instanceof CompoundTag compound
+                        && containsStringValue(compound)) {
+                    recordCommandWarning(
+                            "function_macro_string",
+                            source,
+                            "Inline function macro arguments contain a string value; nested commands or user-facing text are kept unchanged and need manual review");
+                    return true;
+                }
+            }
+            context = context.getChild();
+        }
+        return false;
+    }
+
+    private static ParsedCommand parseAcceptedCommand(ParserContext parser, String command) {
+        if (command == null || command.isBlank()) return null;
+        try {
+            ParseResults<CommandSourceStack> results =
+                    parser.commands().getDispatcher().parse(command, parser.source());
+            if (!results.getReader().canRead()) {
+                return new ParsedCommand(command, results, null);
+            }
+            ParsedCommand normalized = normalizeLegacyNbtCommand(parser, command);
+            if (normalized != null) return normalized;
+            return parseNestedCommand(parser, command);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static boolean containsStringValue(Tag tag) {
+        if (tag instanceof StringTag) return true;
+        if (tag instanceof CompoundTag compound) {
+            for (String key : NbtUtils.getKeys(compound)) {
+                Tag child = compound.get(key);
+                if (child != null && containsStringValue(child)) return true;
+            }
+            return false;
+        }
+        if (tag instanceof ListTag list) {
+            for (Tag child : list) {
+                if (containsStringValue(child)) return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * The execute condition grammar is context-sensitive to the command source.  A static
      * extraction source has no selected entity, so some otherwise valid score predicates stop the
@@ -873,7 +942,17 @@ final class CommandParseSupport {
             if (child == null) continue;
 
             String keyPath = path.isBlank() ? name : path + "." + name;
+            if (depth + 1 < TranslationContext.config().nbtMaxDepth()
+                    && child instanceof CompoundTag component
+                    && isTextComponentCompound(component)) {
+                changed |= TranslationUtils.translateNbtComponent(compound, name, keyPath);
+                continue;
+            }
             if ("text".equals(name)) {
+                if (child instanceof StringTag value
+                        && isExactMacroPlaceholder(NbtUtils.getStringValue(value))) {
+                    continue;
+                }
                 boolean textChanged =
                         TranslationUtils.translateNbtComponent(compound, name, keyPath);
                 changed |= textChanged;
@@ -888,6 +967,16 @@ final class CommandParseSupport {
             changed |= translateTextNbtChildren(child, keyPath, depth + 1, traversal);
         }
         return changed;
+    }
+
+    private static boolean isTextComponentCompound(CompoundTag compound) {
+        return compound != null && compound.get("text") instanceof StringTag;
+    }
+
+    private static boolean isExactMacroPlaceholder(String value) {
+        if (value == null || value.length() < 4) return false;
+        int close = value.indexOf(')', 2);
+        return value.startsWith("$(") && close == value.length() - 1 && value.indexOf('(', 2) < 0;
     }
 
     private static boolean translateTextNbtChildren(
