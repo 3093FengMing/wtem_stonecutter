@@ -220,8 +220,10 @@ public class WtemScreen extends Screen {
                         ? CommonComponents.GUI_DONE
                         : CommonComponents.GUI_CANCEL);
         extractButton.visible = !started;
-        selectButton.visible = !started;
-        configButton.visible = !started;
+        if (Wtem.LOADED_YACL) {
+            selectButton.visible = !started;
+            configButton.visible = !started;
+        }
         // Before extraction the progress bar occupies the same vertical area as the configuration
         // button. It also has no meaningful counters yet. Region extraction may be disabled, so the
         // run state rather than totalChunks decides when the progress/report area becomes visible.
