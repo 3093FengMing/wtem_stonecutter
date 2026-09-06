@@ -1023,6 +1023,51 @@ class FunctionHandlerTest {
                 TranslationContext.snapshot().containsValue("Display Totems Popped on Player List"),
                 TranslationContext.snapshot()::toString);
     }
+
+    @Test
+    void extractsTextFromNestedHoverComponentArrays() {
+        String command =
+                "tellraw @s [{\"atlas\":\"items\",sprite:\"item/breeze_rod\"},"
+                        + "{shadow_color:1744013811,text:\" Mage\","
+                        + "click_event:{action:\"run_command\",command:\"/trigger gear set 1\"},"
+                        + "hover_event:{action:\"show_text\",value:[["
+                        + "{text:\"1. \",italic:false,color:\"#c1fdff\"},"
+                        + "{color:\"white\",atlas:\"gui\",sprite:\"toast/right_click\"},"
+                        + "{text:\" to heal the closest teamate\",italic:false,color:\"#c1fdff\"}],"
+                        + "[{text:\"\\n2. \",italic:false,color:\"#c1fdff\"},"
+                        + "{color:\"white\",atlas:\"gui\",sprite:\"toast/right_click\"},"
+                        + "{text:\" + Sneak to heal yourself\",italic:false,color:\"#c1fdff\"}],"
+                        + "{text:\"\\n- If you are the only player on your team, you always heal yourself\","
+                        + "italic:false,color:\"#c1fdff\"},"
+                        + "[{text:\"\\n10s Cooldown\",italic:false,color:\"#6f7082\"}]]}}]";
+
+        String result = FunctionHandler.processFunction(List.of(command));
+
+        assertNotEquals(command, result, result);
+        assertTrue(result.contains("\"atlas\":\"items\""), result);
+        assertTrue(result.contains("\"sprite\":\"item/breeze_rod\""), result);
+        assertTrue(result.contains("\"shadow_color\":1744013811"), result);
+        assertTrue(result.contains("\"command\":\"/trigger gear set 1\""), result);
+        assertTrue(result.contains("\"translate\""), result);
+        assertEquals(
+                7,
+                TranslationContext.snapshot().size(),
+                TranslationContext.snapshot()::toString);
+        for (String literal :
+                List.of(
+                        " Mage",
+                        "1. ",
+                        " to heal the closest teamate",
+                        "\\n2. ",
+                        " + Sneak to heal yourself",
+                        "\\n- If you are the only player on your team, you always heal yourself",
+                        "\\n10s Cooldown")) {
+            assertTrue(
+                    TranslationContext.snapshot().values().stream()
+                            .anyMatch(value -> value.contains(literal.replace("\\n", "\n"))),
+                    literal + " not found in " + TranslationContext.snapshot());
+        }
+    }
     //?}
 
     @Test

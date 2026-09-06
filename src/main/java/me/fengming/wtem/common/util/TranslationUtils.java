@@ -490,6 +490,17 @@ public final class TranslationUtils {
         int cursor = 0;
         while (cursor < source.size()) {
             JsonElement element = source.get(cursor);
+            // A component-valued field may contain arrays nested inside its outer sequence. This
+            // is valid for tellraw hover text such as `value:[[...],[...],{...}]`; recurse into
+            // the child array while preserving that array boundary instead of copying it as an
+            // opaque non-component element.
+            if (element.isJsonArray()) {
+                TransformResult nested = translateComponentArray(element.getAsJsonArray());
+                result.add(nested.value());
+                tracker.add(nested.changed());
+                cursor++;
+                continue;
+            }
             if (!isComponentElement(element)) {
                 result.add(element.deepCopy());
                 cursor++;
