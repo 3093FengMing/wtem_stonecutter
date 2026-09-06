@@ -81,6 +81,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -116,6 +117,9 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     private final StructureTemplateManager structureManager;
     /** Snapshot for one run; refreshed immediately before the worker thread starts. */
     private volatile WtemConfig config = WtemConfig.active();
+    /** Last extraction phase entered by the worker, retained for diagnostics if it fails. */
+    private volatile String currentPhase = "not started";
+    private volatile long extractionStartedAtNanos;
 
     public WorldExtractor(DataFixer dataFixer,
                           WorldStem worldStem,
@@ -160,6 +164,17 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         // the resulting configuration here, after that screen has closed, and keep it stable for
         // the complete run.
         this.config = WtemConfig.active();
+        this.extractionStartedAtNanos = System.nanoTime();
+        Wtem.LOGGER.info(
+                "Starting world extraction: world={}, root={}, stages={}, language={}, region_snbt={}, schema={}, ai_translation={}, resource_pack={}",
+                this.levelRoot().getFileName(),
+                this.levelRoot(),
+                enabledStages(),
+                this.config.languageFile(),
+                this.config.outputs().exportRegionSnbt(),
+                this.config.outputs().exportSchema(),
+                this.config.aiTranslation().enabled(),
+                this.config.resourcePack().enabled());
 
         try {
             this.thread.start();
@@ -251,6 +266,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                         .filter(pack -> pack.location().source() == PackSource.WORLD)
                         .sorted(Comparator.comparing(PackResources::packId))
                         .toList();
+        Wtem.LOGGER.info("Discovered {} world data packs", packs.size());
         for (PackResources pack : packs) {
             if (shouldStop()) return;
             String packId = pack.packId();
@@ -260,6 +276,8 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             String outputPackId = sanitizePackId(packId) + "_" + shortHash(packId) + "_wtem";
             Path outputRoot = datapackDir.resolve(outputPackId);
             Path staging = null;
+            long packStartedAt = System.nanoTime();
+            Wtem.LOGGER.info("Starting data pack extraction: {}", packId);
             try (var transaction = TranslationContext.beginTransaction();
                     var ignored = TranslationContext.pushLocation(packId)) {
                 int recordsBefore = TranslationContext.recordCount();
@@ -268,7 +286,10 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                 // Function macros are parsed after all functions in this pack have been indexed,
                 // so a caller that appears later alphabetically can still provide values to an
                 // earlier callee.
-                FunctionHandler.initializeMacroCallGraph(collectFunctionSources(pack));
+                Map<String, String> functionSources = collectFunctionSources(pack);
+                Wtem.LOGGER.info(
+                        "Indexed {} functions for data pack {}", functionSources.size(), packId);
+                FunctionHandler.initializeMacroCallGraph(functionSources);
                 int modifiedResources =
                         extractPackMetadata(
                                         pack,
@@ -352,6 +373,10 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                                 exception);
                     }
                 }
+                Wtem.LOGGER.info(
+                        "Finished data pack extraction: {} ({} ms)",
+                        packId,
+                        elapsedMillis(packStartedAt));
             }
         }
     }
@@ -566,14 +591,18 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
     //? if >=26.1 {
     private void runExtractionSafely() {
-        beginRun();
+        Wtem.LOGGER.info("World extraction worker started");
         try {
+            currentPhase = "initialization";
+            beginRun();
             FunctionHandler.initializeParser(this.registry, this.session.diagnostics());
             runExtraction();
             finishRun();
         } catch (Throwable throwable) {
             handleFatalFailure(throwable);
         } finally {
+            currentPhase = "cleanup";
+            Wtem.LOGGER.info("World extraction cleanup started");
             this.upgradeProgress.setFinished(true);
             try {
                 closeWorkerResources();
@@ -581,6 +610,12 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                 FunctionHandler.releaseParser();
                 TranslationContext.release();
             }
+            Wtem.LOGGER.info(
+                    "World extraction worker finished: status={}, phase={}, elapsed={} ms, report={}",
+                    this.session.status(),
+                    this.currentPhase,
+                    elapsedMillis(this.extractionStartedAtNanos),
+                    this.session.report());
         }
     }
 
@@ -595,7 +630,19 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
 
         runNonRegionExtraction();
 
+        if (shouldStop()) {
+            Wtem.LOGGER.info("Skipping saved-data flush: cancellation requested");
+            return;
+        }
+        // The chunk progress bar may already read 100% here; the remaining flush and output
+        // phases are still part of the extraction lifecycle.
+        currentPhase = "saved_data.save";
+        long saveStartedAt = System.nanoTime();
+        Wtem.LOGGER.info("Saving extracted world data");
         this.savedDataStorage.saveAndJoin();
+        Wtem.LOGGER.info(
+                "Finished saving extracted world data in {} ms",
+                elapsedMillis(saveStartedAt));
     }
 
     private void work(DataFixTypes dataFixType, AbstractWHandler<CompoundTag> handler, String folderName) {
@@ -603,6 +650,7 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         beginChunkStage();
         this.upgradeProgress.reset(dataFixType);
         this.upgradeProgress.setType(UpgradeProgress.Type.REGIONS);
+        Wtem.LOGGER.info("Initialized {} chunk extraction stage", folderName);
         int previousCopiesFileAmounts = 0;
 
         for (ResourceKey<Level> level : this.orderedLevels) {
@@ -610,11 +658,25 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
             upgrader.init(level, this.levelStorage);
             previousCopiesFileAmounts += upgrader.fileAmount();
             upgraders.add(upgrader);
+            Wtem.LOGGER.info(
+                    "Prepared {} chunk extraction for dimension {}: files={}",
+                    folderName,
+                    ResourceIds.key(level),
+                    upgrader.fileAmount());
         }
 
         for (var upgrader : upgraders) {
             if (shouldStop()) return;
+            long startedAt = System.nanoTime();
+            Wtem.LOGGER.info("Processing {} chunk extraction batch", folderName);
             upgrader.upgrade();
+            Wtem.LOGGER.info(
+                    "Finished {} chunk extraction batch in {} ms: converted={}, skipped={}, total={}",
+                    folderName,
+                    elapsedMillis(startedAt),
+                    this.upgradeProgress.getConverted(),
+                    this.upgradeProgress.getSkipped(),
+                    this.upgradeProgress.getTotalChunks());
         }
     }
 
@@ -705,11 +767,37 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     }
 
     private void runStage(WtemConfig.Stage stage, Runnable extraction) {
-        if (shouldStop() || !this.config.isEnabled(stage)) return;
+        if (shouldStop()) {
+            Wtem.LOGGER.info("Skipping extraction stage {}: cancellation requested", stage.id());
+            return;
+        }
+        if (!this.config.isEnabled(stage)) {
+            Wtem.LOGGER.info("Skipping extraction stage {}: disabled by configuration", stage.id());
+            return;
+        }
         // Every row in the report is attributed to the stage that produced it, so a translator
         // reading the file knows whether to look in a chunk, a data pack, or the scoreboard.
+        currentPhase = stage.id();
+        ExtractionReport before = this.session.report();
+        int translatedEntriesBefore = TranslationContext.extractedEntryCount();
+        long startedAt = System.nanoTime();
+        boolean completed = false;
+        Wtem.LOGGER.info("Starting extraction stage {}", stage.id());
         try (var ignored = TranslationContext.pushSource(stage.id())) {
             extraction.run();
+            completed = true;
+        } finally {
+            ExtractionReport after = this.session.report();
+            Wtem.LOGGER.info(
+                    "{} extraction stage {} in {} ms: translated_entries_delta={}, modified_chunks_delta={}, modified_resources_delta={}, modified_saved_data_delta={}, warnings={}",
+                    completed ? "Finished" : "Aborted",
+                    stage.id(),
+                    elapsedMillis(startedAt),
+                    TranslationContext.extractedEntryCount() - translatedEntriesBefore,
+                    after.modifiedChunks() - before.modifiedChunks(),
+                    after.modifiedResources() - before.modifiedResources(),
+                    after.modifiedSavedData() - before.modifiedSavedData(),
+                    after.failures().size() - before.failures().size());
         }
     }
 
@@ -733,21 +821,29 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
     private void finishRun() {
         this.session.setTranslatedEntries(TranslationContext.extractedEntryCount());
         if (shouldStop()) {
+            currentPhase = "partial_output";
+            Wtem.LOGGER.info("Extraction cancelled; publishing partial output");
             publishPartialLanguage();
             this.session.completeCancellation();
             logDiagnostics(0);
             return;
         }
 
-        exportLanguage(languageOutput());
-        exportManifest();
-        exportSchema();
+        runOutputPhase("output.language", () -> exportLanguage(languageOutput()));
+        runOutputPhase("output.manifest", this::exportManifest);
+        runOutputPhase("output.schema", this::exportSchema);
         // Normal extraction is complete at this point. Publish its diagnostics before the
         // optional AI request so a slow provider cannot hide useful warnings from the user.
         int loggedDiagnostics = logDiagnostics(0);
         Path aiFile = null;
         if (this.config.aiTranslation().enabled()) {
             Map<String, String> source = TranslationContext.snapshot();
+            currentPhase = "ai_translation";
+            Wtem.LOGGER.info(
+                    "Starting AI translation: entries={}, batches={}, timeout_seconds={}",
+                    AiTranslationExporter.countTranslatableEntries(source),
+                    AiTranslationExporter.countBatches(this.config.aiTranslation(), source),
+                    this.config.aiTranslation().timeoutSeconds());
             this.session.beginAiTranslation(
                     AiTranslationExporter.countTranslatableEntries(source),
                     AiTranslationExporter.countBatches(this.config.aiTranslation(), source));
@@ -755,15 +851,19 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
                 aiFile = exportAiTranslation(source);
             } finally {
                 this.session.finishAiTranslation();
+                Wtem.LOGGER.info("Finished AI translation phase");
             }
             if (shouldStop()) {
+                currentPhase = "partial_output";
+                Wtem.LOGGER.info("Extraction cancelled after AI translation; publishing partial output");
                 publishPartialLanguage();
                 this.session.completeCancellation();
                 logDiagnostics(loggedDiagnostics);
                 return;
             }
         }
-        exportResourcePack(aiFile);
+        Path resourcePackAiFile = aiFile;
+        runOutputPhase("output.resource_pack", () -> exportResourcePack(resourcePackAiFile));
         this.session.complete();
         logDiagnostics(loggedDiagnostics);
     }
@@ -773,7 +873,41 @@ public class WorldExtractor extends WorldUpgrader implements AutoCloseable {
         this.session.fail(throwable);
         publishPartialLanguage();
         logDiagnostics(0);
-        Wtem.LOGGER.error("Failed to extract world", throwable);
+        Wtem.LOGGER.error(
+                "Failed to extract world during phase {} (status={})",
+                this.currentPhase,
+                this.session.status(),
+                throwable);
+    }
+
+    private void runOutputPhase(String phase, Runnable output) {
+        currentPhase = phase;
+        long startedAt = System.nanoTime();
+        boolean completed = false;
+        Wtem.LOGGER.info("Starting extraction phase {}", phase);
+        try {
+            output.run();
+            completed = true;
+        } finally {
+            Wtem.LOGGER.info(
+                    "{} extraction phase {} in {} ms",
+                    completed ? "Finished" : "Aborted",
+                    phase,
+                    elapsedMillis(startedAt));
+        }
+    }
+
+    private String enabledStages() {
+        StringJoiner stages = new StringJoiner(",", "[", "]");
+        for (WtemConfig.Stage stage : WtemConfig.Stage.values()) {
+            if (this.config.isEnabled(stage)) stages.add(stage.id());
+        }
+        return stages.toString();
+    }
+
+    private static long elapsedMillis(long startedAtNanos) {
+        if (startedAtNanos <= 0L) return 0L;
+        return Math.max(0L, (System.nanoTime() - startedAtNanos) / 1_000_000L);
     }
 
     private int logDiagnostics(int alreadyLogged) {
