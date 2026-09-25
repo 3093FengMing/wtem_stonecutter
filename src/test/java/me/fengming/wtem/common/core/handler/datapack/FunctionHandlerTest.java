@@ -910,7 +910,7 @@ class FunctionHandlerTest {
 
         String result = FunctionHandler.processFunction(List.of(command));
 
-        assertEquals(command, result);
+        assertEquals(command, result, result);
         assertTrue(
                 diagnostics.failures().stream()
                         .anyMatch(failure -> "function_macro_string".equals(failure.scope())),
@@ -934,6 +934,117 @@ class FunctionHandlerTest {
                 TranslationContext.snapshot().values().stream()
                         .anyMatch(value -> value.contains("#%s")),
                 TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void preservesExactCustomNameMacroAndTagSuffixInSummonNbt() {
+        String command =
+                "$summon minecraft:piglin ~ ~ ~ "
+                        + "{Tags:[\"CivilianController\",\"$(name)Controller\"],"
+                        + "CustomName:\"$(name)\",PersistenceRequired:1b}";
+
+        String result = FunctionHandler.processFunction(command, "test:macro_summon.mcfunction");
+
+        assertEquals(command, result);
+        assertTrue(TranslationContext.snapshot().isEmpty(), TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void preservesSuffixedCustomNameMacroInSummonNbt() {
+        String command =
+                "$summon minecraft:piglin ~ ~ ~ {CustomName:\"$(name)Controller\","
+                        + "Tags:[\"$(name)Controller\"]}";
+
+        String result = FunctionHandler.processFunction(command, "test:suffixed_macro_summon.mcfunction");
+
+        assertEquals(command, result);
+        assertTrue(TranslationContext.snapshot().isEmpty(), TranslationContext.snapshot()::toString);
+    }
+
+    @Test
+    void keepsCustomNameMacroWhenStaticTextSurroundsIt() {
+        String command =
+                "$summon minecraft:piglin ~ ~ ~ {CustomName:\"Hello $(name)Controller\"}";
+
+        String result = FunctionHandler.processFunction(command, "test:mixed_custom_name.mcfunction");
+
+        assertEquals(command, result);
+        assertTrue(result.contains("$(name)"), result);
+        assertTrue(result.contains("Hello"), result);
+    }
+
+    @Test
+    void parameterizesTextDisplayMacroInsteadOfMaterializingIt() {
+        String command =
+                "$summon minecraft:text_display ~ ~ ~ {text:\"Hello $(name)\"}";
+
+        String result = FunctionHandler.processFunction(command, "test:mixed_text_display.mcfunction");
+
+        assertTrue(result.contains("translate"), result);
+        assertTrue(result.contains("$(name)"), result);
+        assertEquals("Hello %s", TranslationContext.snapshot().values().stream().findFirst().orElse(""));
+    }
+
+    @Test
+    void preservesBlockEntityCustomNameMacroInSetblock() {
+        String command =
+                "$setblock ~ ~ ~ chest{CustomName:\"$(name)\"}";
+
+        String result = FunctionHandler.processFunction(command, "test:block_macro.mcfunction");
+
+        assertEquals(command, result, result);
+        assertTrue(result.contains("$(name)"), result);
+    }
+
+    @Test
+    void preservesItemCustomNameMacroInSummonItem() {
+        String command =
+                "$summon item ~ ~ ~ {Item:{id:stone,count:1,components:{custom_name:\"$(name)\"}}}";
+
+        String result = FunctionHandler.processFunction(command, "test:item_custom_name_macro.mcfunction");
+
+        assertEquals(command, result, result);
+        assertTrue(result.contains("$(name)"), result);
+    }
+
+    @Test
+    void preservesCustomNameMacroWhenAnotherEntityTextIsTranslated() {
+        String command =
+                "$summon minecraft:piglin ~ ~ ~ "
+                        + "{Tags:[\"$(name)Controller\"],CustomName:\"$(name)\","
+                        + "Passengers:[{id:\"minecraft:pig\",Tags:[\"$(name)PassengerController\"],"
+                        + "CustomName:\"Guard\"}]}";
+
+        String result = FunctionHandler.processFunction(command, "test:nested_macro_summon.mcfunction");
+
+        assertTrue(result.contains("CustomName:\"$(name)\""), result);
+        assertTrue(result.contains("\"$(name)Controller\""), result);
+        assertTrue(result.contains("\"$(name)PassengerController\""), result);
+        assertTrue(result.contains("translate"), result);
+        assertEquals("Guard", TranslationContext.snapshot().get("entity.pig.1.name"));
+    }
+
+    @Test
+    void preservesCustomNameMacroWhenNonTextMacroHasKnownCallerValue() {
+        String command =
+                "$summon minecraft:piglin ~ ~ ~ "
+                        + "{Tags:[\"$(name)Controller\"],CustomName:\"$(name)\"}";
+        FunctionHandler.initializeMacroCallGraph(
+                Map.of(
+                        "test:caller.mcfunction",
+                                "data merge storage test:runtime {name:\"Bob\"}\n"
+                                        + "function test:macro_summon with storage test:runtime",
+                        "test:macro_summon.mcfunction", command));
+        FunctionHandler.initializeParser(
+                net.minecraft.data.registries.VanillaRegistries.createLookup(),
+                new ExtractionDiagnostics());
+
+        String result = FunctionHandler.processFunction(command, "test:macro_summon.mcfunction");
+
+        assertEquals(command, result);
+        assertTrue(result.contains("CustomName:\"$(name)\""), result);
+        assertTrue(result.contains("\"$(name)Controller\""), result);
+        assertFalse(result.contains("entity.piglin.1.name"), result);
     }
 
     @Test

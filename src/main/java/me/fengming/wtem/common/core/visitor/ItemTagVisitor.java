@@ -22,16 +22,24 @@ import net.minecraft.world.item.component.CustomData;
 public class ItemTagVisitor implements SimpleTagVisitor {
     private final ChangeTracker tracker = new ChangeTracker();
     private final Consumer<CompoundTag> componentValidator;
+    private final boolean preserveCommandMacros;
 
     public ItemTagVisitor() {
-        this(ItemTagVisitor::validateCustomData);
+        this(ItemTagVisitor::validateCustomData, false);
     }
 
     public ItemTagVisitor(Consumer<CompoundTag> componentValidator) {
+        this(componentValidator, false);
+    }
+
+    /** Creates an item visitor for command payloads that must retain direct custom-name macros. */
+    public ItemTagVisitor(
+            Consumer<CompoundTag> componentValidator, boolean preserveCommandMacros) {
         this.componentValidator =
                 componentValidator == null
                         ? ItemTagVisitor::validateCustomData
                         : componentValidator;
+        this.preserveCommandMacros = preserveCommandMacros;
     }
 
     public boolean isChanged() {
@@ -124,13 +132,15 @@ public class ItemTagVisitor implements SimpleTagVisitor {
         this.tracker.add(handleNestedData(components));
     }
 
-    private static boolean translateItemText(CompoundTag components) {
+    private boolean translateItemText(CompoundTag components) {
         ChangeTracker tracker = new ChangeTracker();
         String customName = componentKey(components, "minecraft:custom_name");
         String itemName = componentKey(components, "minecraft:item_name");
         tracker.add(
-                TranslationUtils.translateNbtComponent(
-                        components, customName, "name"));
+                this.preserveCommandMacros
+                        ? TranslationUtils.translateNbtComponentPreservingMacros(
+                                components, customName, "name")
+                        : TranslationUtils.translateNbtComponent(components, customName, "name"));
         tracker.add(
                 TranslationUtils.translateNbtComponent(
                         components, itemName, "item_name"));
@@ -301,7 +311,8 @@ public class ItemTagVisitor implements SimpleTagVisitor {
     }
 
     private boolean handleNestedData(CompoundTag components) {
-        EntityTagVisitor entityVisitor = new EntityTagVisitor(this.componentValidator);
+        EntityTagVisitor entityVisitor =
+                new EntityTagVisitor(this.componentValidator, this.preserveCommandMacros);
         for (String componentName :
                 List.of("minecraft:entity_data", "minecraft:bucket_entity_data")) {
             CompoundTag entity =
@@ -314,7 +325,8 @@ public class ItemTagVisitor implements SimpleTagVisitor {
                         components, componentKey(components, "minecraft:block_entity_data"));
         boolean changed =
                 !blockEntity.isEmpty()
-                        && new BlockEntityWHandler(this.componentValidator)
+                        && new BlockEntityWHandler(
+                                        this.componentValidator, this.preserveCommandMacros)
                                 .handle(blockEntity, TranslationContext.config().rebuildNestedKeys());
 
         ListTag bees =

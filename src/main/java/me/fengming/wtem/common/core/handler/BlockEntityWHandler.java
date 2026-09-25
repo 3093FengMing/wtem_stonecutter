@@ -26,13 +26,21 @@ import net.minecraft.nbt.TagVisitor;
  */
 public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
     private final Consumer<CompoundTag> itemComponentValidator;
+    private final boolean preserveCommandMacros;
 
     public BlockEntityWHandler() {
-        this(null);
+        this(null, false);
     }
 
     public BlockEntityWHandler(Consumer<CompoundTag> itemComponentValidator) {
+        this(itemComponentValidator, false);
+    }
+
+    /** Creates a command-payload handler that leaves direct CustomName macros for Minecraft. */
+    public BlockEntityWHandler(
+            Consumer<CompoundTag> itemComponentValidator, boolean preserveCommandMacros) {
         this.itemComponentValidator = itemComponentValidator;
+        this.preserveCommandMacros = preserveCommandMacros;
     }
 
     private static final Set<String> CONTAINER_TYPES =
@@ -92,7 +100,7 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
         return id + " (" + x.getAsInt() + ", " + y.getAsInt() + ", " + z.getAsInt() + ")";
     }
 
-    private static boolean translateCustomName(CompoundTag tag, String id) {
+    private boolean translateCustomName(CompoundTag tag, String id) {
         String type = id.isBlank() ? "unknown" : id;
         String countType =
                 CONTAINER_TYPES.contains(type) ? "container." + type : "block_entity." + type;
@@ -100,15 +108,24 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
 
         try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
             ChangeTracker tracker = new ChangeTracker();
-            tracker.add(TranslationUtils.translateNbtComponent(tag, "CustomName", "name"));
-            tracker.add(TranslationUtils.translateNbtComponent(tag, "custom_name", "name"));
+            tracker.add(
+                    this.preserveCommandMacros
+                            ? TranslationUtils.translateNbtComponentPreservingMacros(
+                                    tag, "CustomName", "name")
+                            : TranslationUtils.translateNbtComponent(tag, "CustomName", "name"));
+            tracker.add(
+                    this.preserveCommandMacros
+                            ? TranslationUtils.translateNbtComponentPreservingMacros(
+                                    tag, "custom_name", "name")
+                            : TranslationUtils.translateNbtComponent(tag, "custom_name", "name"));
             if (tracker.isChanged()) TranslationContext.increaseTypeCounts(countType);
             return tracker.isChanged();
         }
     }
 
     private TagVisitor getVisitor(String id, ChangeTracker tracker) {
-        EntityTagVisitor entityVisitor = new EntityTagVisitor(this.itemComponentValidator);
+        EntityTagVisitor entityVisitor =
+                new EntityTagVisitor(this.itemComponentValidator, this.preserveCommandMacros);
         if (CONTAINER_TYPES.contains(id)) return itemListVisitor("Items", tracker);
         return switch (id) {
             case "jukebox" -> itemVisitor("RecordItem", tracker);
@@ -171,7 +188,8 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
 
     private SimpleTagVisitor itemListVisitor(String field, ChangeTracker tracker) {
         return tag -> {
-            ItemTagVisitor visitor = new ItemTagVisitor(this.itemComponentValidator);
+            ItemTagVisitor visitor =
+                    new ItemTagVisitor(this.itemComponentValidator, this.preserveCommandMacros);
             NbtUtils.getList(tag, field, Tag.TAG_COMPOUND).accept(visitor);
             tracker.add(visitor.isChanged());
         };
@@ -179,7 +197,8 @@ public class BlockEntityWHandler extends AbstractWHandler<CompoundTag> {
 
     private SimpleTagVisitor itemVisitor(String field, ChangeTracker tracker) {
         return tag -> {
-            ItemTagVisitor visitor = new ItemTagVisitor(this.itemComponentValidator);
+            ItemTagVisitor visitor =
+                    new ItemTagVisitor(this.itemComponentValidator, this.preserveCommandMacros);
             NbtUtils.getCompound(tag, field).accept(visitor);
             tracker.add(visitor.isChanged());
         };

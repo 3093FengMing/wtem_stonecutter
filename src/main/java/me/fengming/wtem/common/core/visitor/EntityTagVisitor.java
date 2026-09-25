@@ -20,13 +20,25 @@ import net.minecraft.nbt.Tag;
 public class EntityTagVisitor implements SimpleTagVisitor {
     private final ChangeTracker tracker = new ChangeTracker();
     private final Consumer<CompoundTag> itemComponentValidator;
+    private final boolean preserveCommandMacros;
 
     public EntityTagVisitor() {
-        this(null);
+        this(null, false);
     }
 
     public EntityTagVisitor(Consumer<CompoundTag> itemComponentValidator) {
+        this(itemComponentValidator, false);
+    }
+
+    /**
+     * Creates an entity visitor for command payloads. Command macros in direct {@code CustomName}
+     * strings are runtime values and must not be converted into a generated translation key before
+     * Minecraft expands the function.
+     */
+    public EntityTagVisitor(
+            Consumer<CompoundTag> itemComponentValidator, boolean preserveCommandMacros) {
         this.itemComponentValidator = itemComponentValidator;
+        this.preserveCommandMacros = preserveCommandMacros;
     }
 
     public boolean isChanged() {
@@ -76,7 +88,7 @@ public class EntityTagVisitor implements SimpleTagVisitor {
         return description.append(')').toString();
     }
 
-    private static boolean translateEntityText(CompoundTag tag, String entityId) {
+    private boolean translateEntityText(CompoundTag tag, String entityId) {
         String type = entityId.isBlank() ? "unknown" : entityId;
         ChangeTracker tracker = new ChangeTracker();
         tracker.add(translateIndexedComponent(tag, "CustomName", "entity." + type, "name"));
@@ -98,11 +110,16 @@ public class EntityTagVisitor implements SimpleTagVisitor {
         return tracker.isChanged();
     }
 
-    private static boolean translateIndexedComponent(
+    private boolean translateIndexedComponent(
             CompoundTag tag, String field, String countType, String keyPath) {
         int index = TranslationContext.getTypeCounts(countType);
         try (var ignored = TranslationContext.pushKey(countType + "." + index)) {
-            if (TranslationUtils.translateNbtComponent(tag, field, keyPath)) {
+            boolean changed =
+                    this.preserveCommandMacros && "CustomName".equals(field)
+                            ? TranslationUtils.translateNbtComponentPreservingMacros(
+                                    tag, field, keyPath)
+                            : TranslationUtils.translateNbtComponent(tag, field, keyPath);
+            if (changed) {
                 TranslationContext.increaseTypeCounts(countType);
                 return true;
             }
@@ -159,7 +176,8 @@ public class EntityTagVisitor implements SimpleTagVisitor {
 
     private ItemTagVisitor itemVisitor() {
         return this.itemComponentValidator == null
-                ? new ItemTagVisitor()
-                : new ItemTagVisitor(this.itemComponentValidator);
+                ? new ItemTagVisitor(null, this.preserveCommandMacros)
+                : new ItemTagVisitor(
+                        this.itemComponentValidator, this.preserveCommandMacros);
     }
 }

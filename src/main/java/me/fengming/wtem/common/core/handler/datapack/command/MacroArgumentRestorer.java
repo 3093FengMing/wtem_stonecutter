@@ -26,7 +26,7 @@ final class MacroArgumentRestorer {
                 Set.of("text", "contents", "description",
                     "title", "external_title", "label",
                     "tooltip", "display", "separator",
-                    "extra");
+                    "extra", "CustomName", "custom_name");
         private static final Set<String> STRUCTURED_FIELDS =
                 Set.of("text", "contents", "description",
                     "title", "external_title", "label",
@@ -41,7 +41,8 @@ final class MacroArgumentRestorer {
                     "click_event", "hoverEvent",
                     "hover_event", "action", "command",
                     "value", "type", "id", "raw",
-                    "path", "width", "columns");
+                    "path", "width", "columns",
+                    "CustomName", "custom_name");
         private static final Set<String> SCALAR_COMPONENT_FIELDS =
                 Set.of("color", "shadow_color", "font", "insertion", "type", "id", "path");
 

@@ -146,6 +146,22 @@ public final class TranslationUtils {
      */
     public static boolean translateNbtComponent(
             CompoundTag compound, String path, String keyPath) {
+        return translateNbtComponent(compound, path, keyPath, false);
+    }
+
+    /**
+     * Translates an NBT component while leaving a direct macro-valued string untouched.
+     *
+     * <p>Serialized JSON components are still translated normally, so a value such as
+     * {@code {"text":"Hello $(name)"}} can become a parameterized translation component.
+     */
+    public static boolean translateNbtComponentPreservingMacros(
+            CompoundTag compound, String path, String keyPath) {
+        return translateNbtComponent(compound, path, keyPath, true);
+    }
+
+    private static boolean translateNbtComponent(
+            CompoundTag compound, String path, String keyPath, boolean preserveExactMacro) {
         if (compound == null || path == null || path.isBlank()) return false;
 
         try (var transaction = TranslationContext.beginTransaction();
@@ -162,7 +178,9 @@ public final class TranslationUtils {
                             originalTag,
                             originalTag instanceof StringTag
                                     ? NbtUtils.getString(parent, tagPath.name())
-                                    : null);
+                                    : null,
+                            false,
+                            preserveExactMacro);
             if (translatedTag == originalTag) return false;
 
             parent.put(tagPath.name(), translatedTag);
@@ -264,16 +282,32 @@ public final class TranslationUtils {
     }
 
     private static Tag translateNbtComponentTag(Tag originalTag, String stringValue) {
-        return translateNbtComponentTag(originalTag, stringValue, false);
+        return translateNbtComponentTag(originalTag, stringValue, false, false);
     }
 
     private static Tag translateNbtComponentTag(
             Tag originalTag, String stringValue, boolean preferStructured) {
+        return translateNbtComponentTag(originalTag, stringValue, preferStructured, false);
+    }
+
+    private static Tag translateNbtComponentTag(
+            Tag originalTag,
+            String stringValue,
+            boolean preferStructured,
+            boolean preserveExactMacro) {
         if (originalTag instanceof StringTag stringTag) {
             // A string tag means one of two different things. Legacy saves store a whole component
             // serialized to JSON in one, while the component format reads a string as the literal
             // text of a component in its own right. Which one it is decides the form the
             // translation has to be written back in, so the answer is carried to the write below.
+            // A direct function-macro string is runtime data, not translatable text. The macro
+            // must survive until Minecraft expands the command; turning it into a generated
+            // translation key would permanently replace the caller-supplied value. JSON-encoded
+            // components intentionally continue through the normal parameterized translation
+            // path, because their static sibling text remains translatable.
+            if (preserveExactMacro
+                    && !looksLikeSerializedJson(stringValue)
+                    && nextMacro(stringValue, 0) != null) return originalTag;
             boolean serializedJson = false;
             JsonElement sourceJson = null;
             if (looksLikeSerializedJson(stringValue)) {

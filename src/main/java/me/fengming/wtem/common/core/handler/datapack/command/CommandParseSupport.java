@@ -441,6 +441,7 @@ final class CommandParseSupport {
                                             argument,
                                             argumentStart,
                                             argumentEnd,
+                                            line.sourceArgument(argumentStart, argumentEnd),
                                             sourceArgument,
                                             line.materializedArgument(argumentStart, argumentEnd),
                                             parser.registries());
@@ -765,6 +766,7 @@ final class CommandParseSupport {
             ParsedArgument<CommandSourceStack, ?> argument,
             int replacementStart,
             int replacementEnd,
+            String originalArgument,
             String sourceArgument,
             String materializedArgument,
             HolderLookup.Provider registries) {
@@ -834,9 +836,20 @@ final class CommandParseSupport {
                 EntityTagVisitor entityVisitor =
                         new EntityTagVisitor(
                                 components ->
-                                        validateItemComponents(command, components, registries));
+                                        validateItemComponents(command, components, registries),
+                                true);
                 translatedTag.accept(entityVisitor);
                 boolean changed = entityVisitor.isChanged();
+                CompoundTag sourceEntityTag = compound;
+                try {
+                    Tag parsedSource = parseNbt(originalArgument);
+                    if (parsedSource instanceof CompoundTag sourceCompound) {
+                        sourceEntityTag = sourceCompound;
+                    }
+                } catch (Exception ignored) {
+                    // Keep the materialized tag when an unresolved source macro prevents SNBT parsing.
+                }
+                restoreEntityMacroFields(sourceEntityTag, translatedTag);
                 // EntityTagVisitor knows the full entity schema.  The text-only pass is also
                 // needed for newer display entities whose arbitrary NBT text field is a component
                 // sequence rather than the single component shape used by older entities.
@@ -880,18 +893,59 @@ final class CommandParseSupport {
                 replacementStart, replacementEnd, replacement);
     }
 
+    /** Restores command macros in entity fields whose codecs expose only a materialized value. */
+    private static void restoreEntityMacroFields(CompoundTag source, CompoundTag translated) {
+        // EntityTagVisitor may translate a macro-valued CustomName after Brigadier materialized it
+        // as its stand-in.  The source command is authoritative for this runtime field.
+        if (source.contains("CustomName") && source.get("CustomName") instanceof StringTag original
+                && isExactMacroPlaceholder(NbtUtils.getStringValue(original))) {
+            translated.put("CustomName", original.copy());
+        }
+
+        if (source.contains("Tags") && source.get("Tags") instanceof ListTag originalTags
+                && translated.get("Tags") instanceof ListTag translatedTags) {
+            int count = Math.min(originalTags.size(), translatedTags.size());
+            for (int i = 0; i < count; i++) {
+                Tag original = originalTags.get(i);
+                if (!(original instanceof StringTag value)) continue;
+                String text = NbtUtils.getStringValue(value);
+                if (text.contains("$(")) translatedTags.setTag(i, value.copy());
+            }
+        }
+
+        // EntityTagVisitor recursively processes only the Passengers tree.  Restore the same
+        // runtime fields in nested entities before the generic macro-range fallback can mistake
+        // a suffixed value such as `$(name)Controller` for the bare placeholder `$(name)`.
+        if (source.get("Passengers") instanceof ListTag sourcePassengers
+                && translated.get("Passengers") instanceof ListTag translatedPassengers) {
+            int count = Math.min(sourcePassengers.size(), translatedPassengers.size());
+            for (int i = 0; i < count; i++) {
+                Tag sourcePassenger = sourcePassengers.get(i);
+                Tag translatedPassenger = translatedPassengers.get(i);
+                if (sourcePassenger instanceof CompoundTag sourceCompound
+                        && translatedPassenger instanceof CompoundTag translatedCompound) {
+                    restoreEntityMacroFields(sourceCompound, translatedCompound);
+                }
+            }
+        }
+    }
+
     private static ListTag sourceList(String sourceArgument, ListTag fallback) {
         if (sourceArgument == null || sourceArgument.isBlank()) return fallback.copy();
         try {
-            //? if >=1.21.5 {
-            Tag parsed = TagParser.create(NbtOps.INSTANCE).parseFully(sourceArgument);
-            //?} else {
-            /*Tag parsed = fallback.copy();
-            *///?}
+            Tag parsed = parseNbt(sourceArgument);
             return parsed instanceof ListTag list ? list : fallback.copy();
         } catch (Exception ignored) {
             return fallback.copy();
         }
+    }
+
+    private static Tag parseNbt(String source) throws Exception {
+        //? if >=1.21.5 {
+        return TagParser.create(NbtOps.INSTANCE).parseFully(source);
+        //?} else {
+        /*return TagParser.parseTag(source);
+        *///?}
     }
 
     private static void validateItemComponents(

@@ -54,7 +54,7 @@ public final class StructuredCommandArgumentAdapter {
                                 () ->
                                         new IllegalStateException(
                                                 "Item command argument has no registered item id"));
-        ItemTagVisitor visitor = new ItemTagVisitor(componentValidator);
+        ItemTagVisitor visitor = new ItemTagVisitor(componentValidator, true);
         visitor.visitComponents(itemId, components);
         if (!visitor.isChanged()) return Optional.empty();
 
@@ -96,7 +96,7 @@ public final class StructuredCommandArgumentAdapter {
                     .ifPresent(id -> translatedTag.putString("id", id));
         }
 
-        if (!new BlockEntityWHandler(componentValidator).handle(translatedTag)) {
+        if (!new BlockEntityWHandler(componentValidator, true).handle(translatedTag)) {
             return Optional.empty();
         }
         if (temporaryId) translatedTag.remove("id");
