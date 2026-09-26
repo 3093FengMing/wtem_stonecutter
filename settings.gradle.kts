@@ -21,7 +21,7 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 
     // Publishes to Modrinth, CurseForge and GitHub Releases (https://modmuss50.github.io/mod-publish-plugin/)
-    id("me.modmuss50.mod-publish-plugin") version "2.2.0" apply false
+    id("me.modmuss50.mod-publish-plugin") version "2.2.1" apply false
 }
 
 stonecutter {
