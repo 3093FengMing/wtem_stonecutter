@@ -58,7 +58,7 @@ dependencies {
     // YACL 3.8 declares the fabric-api mod id (rather than only individual modules).  Keeping the
     // aggregate dependency also supplies the resource loader required by YACL 3.9 on 26.x.
     modImplementation("net.fabricmc.fabric-api:fabric-api:${sc.properties["deps.fabric_api"] as String}")
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
 }
 
