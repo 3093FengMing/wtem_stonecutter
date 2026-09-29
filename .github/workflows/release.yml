@@ -24,7 +24,7 @@ jobs:
     name: Publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # `publishGithub` uses the tag's commit as the release commitish.
           fetch-depth: 0

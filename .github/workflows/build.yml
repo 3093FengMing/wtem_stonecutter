@@ -45,7 +45,7 @@ jobs:
           - version: '26.2.x'
             java: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # The build script pins JvmVendorSpec.ADOPTIUM. Java 21 is installed alongside the version
       # under test so Gradle itself always has a toolchain it can run on.
